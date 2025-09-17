@@ -1,7 +1,12 @@
 import type { NextConfig } from "next";
 
+// Ensure Turbopack uses this app folder as the project root.
+// This fixes issues where multiple lockfiles exist at the repo root and
+// prevents Next from missing the PostCSS/Tailwind config inside this folder.
 const nextConfig: NextConfig = {
-  /* config options here */
+  turbopack: {
+    root: __dirname,
+  },
 };
 
 export default nextConfig;
