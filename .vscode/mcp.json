@@ -1,0 +1,13 @@
+{
+	"servers": {
+		"supabase": {
+			"url": "https://server.smithery.ai/@supabase-community/supabase-mcp/mcp",
+			"type": "http"
+		},
+		"context7": {
+			"url": "https://server.smithery.ai/@upstash/context7-mcp/mcp",
+			"type": "http"
+		}
+	},
+	"inputs": []
+}
