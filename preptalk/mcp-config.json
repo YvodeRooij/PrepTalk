@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "langgraph-js-docs": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@langchain/mcpdoc",
+        "--urls",
+        "LangGraph JS:https://langchain-ai.github.io/langgraphjs/llms.txt"
+      ],
+      "env": {}
+    }
+  }
+}

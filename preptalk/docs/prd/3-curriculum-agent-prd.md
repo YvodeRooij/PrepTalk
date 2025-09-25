@@ -1,8 +1,8 @@
 # PrepTalk - Curriculum Maker Agent PRD
 
-**Version:** 1.0  
-**Date:** September 2025  
-**Status:** `Ready for Development`
+**Version:** 2.0
+**Date:** September 2025
+**Status:** `In Development`
 
 ---
 
@@ -37,78 +37,109 @@ The **Curriculum Maker Agent** is an AI-powered system that generates a comprehe
 
 ## 2. Agent Architecture & Logic
 
-### 2.1 High-Level Flow
+### 2.1 High-Level Flow (LangGraph Architecture)
 ```mermaid
 graph TD
-    A[Start: User submits Job URL/Text] --> B{1. Parse Job Description};
-    B --> C{2. Research Company};
-    C --> D{3. Determine Curriculum Structure};
-    D --> E{4. Generate Each Round};
-    E --> F[5. Assemble & Save Curriculum];
-    F --> G[End: Return Curriculum ID];
+    A[Start: Job URL] --> B[Parse Job with Gemini URL Context];
+    B --> C[Research Company with Gemini];
+    C --> D[Analyze Role Patterns];
+    D --> E[Design Curriculum Structure];
+    E --> F[Generate All Rounds];
+    F --> G{Quality >= 80%?};
+    G -->|Yes| H[Save to Database];
+    G -->|No| I[Refine Rounds];
+    I --> H;
+    H --> J[End: Return Curriculum];
 
-    subgraph "Step 4: Generate Each Round"
-        direction LR
-        E1[4a. Define Round Type & Persona] --> E2[4b. Generate Topics & Questions];
-        E2 --> E3[4c. Define Evaluation Criteria];
+    subgraph "Research Phase - Sequential"
+        B --> C --> D;
     end
 
-    subgraph "Data Sources"
-        direction LR
-        DS1[Job Description] --> B;
-        DS2[Companies DB] --> C;
-        DS3[Job Requirements DB] --> D;
+    subgraph "Generation Phase - Sequential"
+        E --> F --> G;
     end
 ```
 
-### 2.2 Detailed Step-by-Step Logic
+### 2.2 Implementation Architecture
 
-1.  **Input Validation & Parsing (Step 1)**
-    - **Input**: Job URL or raw text.
-    - **Action**:
-        - If URL, scrape the content.
-        - Use a robust parsing model (e.g., GPT-4 with function calling) to extract structured data: `title`, `company_name`, `responsibilities`, `required_skills`, `preferred_skills`, `experience_level`.
-        - Store the parsed job details in the `jobs` table.
-    - **Output**: A structured `job` object.
+**Technology Stack:**
+- **LangGraph**: State-based graph orchestration
+- **Gemini 2.5 Flash**: Primary LLM with URL context capabilities
+- **No external scraping**: Gemini handles all web content fetching
+- **Single graph**: No subgraphs needed for simpler state management
 
-2.  **Company & Role Research (Step 2)**
-    - **Input**: `company_name` from the job object.
-    - **Action**:
-        - Query the `companies` table for pre-existing research data (mission, values, recent news, interview process notes).
-        - Query the `interview_patterns` table for known question types or focus areas for this company.
-    - **Output**: A "Company Context" document.
+### 2.3 Detailed Node Implementation
 
-3.  **Determine Curriculum Structure (Step 3)**
-    - **Input**: Structured `job` object, "Company Context".
-    - **Action**: This is the core "planning" step for the agent.
-        - **LLM Prompt**: "You are an expert interview coach. Given the following job role and company information, design a realistic, multi-round interview plan. Specify the type and goal of each round. For a *[Job Title]* role at *[Company Name]*, a typical process is..."
-        - **Logic**:
-            - Based on `experience_level` and `job_type`, determine the number and type of rounds.
-                - *Entry-level*: Phone Screen, Technical Screen, Final (Behavioral + Coding).
-                - *Senior/Staff*: Recruiter Screen, Technical Deep Dive, System Design, Leadership/Behavioral.
-            - Incorporate company-specific patterns (e.g., if `Amazon`, add a "Bar Raiser" behavioral round).
-    - **Output**: A list of round definitions, e.g., `[{round: 1, type: 'phone_screen'}, {round: 2, type: 'system_design'}]`.
+1. **Parse Job Node**
+   - **Input**: Job URL from state
+   - **Method**: Gemini URL context API
+   - **Action**:
+     - Pass job URL directly to Gemini with extraction prompt
+     - Extract: title, company, level, requirements, responsibilities
+   - **Output**: Structured JobData object
 
-4.  **Generate Each Round (Step 4 - Loop)**
-    - For each round definition from the previous step:
-        - **4a. Define Round Persona & Focus**:
-            - **LLM Prompt**: "For a *[Round Type]* interview for a *[Job Title]*, create an interviewer persona. Define their role, personality, and what they are trying to assess."
-            - **Example Output**: `persona: {name: 'David', role: 'Senior Engineer', personality: 'Pragmatic and direct', goal: 'Assess raw coding ability and problem-solving skills.'}`.
-        - **4b. Generate Topics & Questions**:
-            - **LLM Prompt**: "Based on the job's required skills *[skills list]* and the focus of this *[Round Type]* round, generate 5-7 key topics to cover and 2-3 sample questions for each."
-            - **Example Output**: `topics: [{topic: 'Data Structures', questions: ['...']}, {topic: 'Concurrency', questions: ['...']}]`.
-        - **4c. Define Evaluation Criteria**:
-            - **LLM Prompt**: "Create a scoring rubric for this *[Round Type]* round. Define 3-5 key criteria and describe what 'Excellent', 'Good', and 'Needs Improvement' looks like for each."
-            - **Example Output**: `criteria: [{criterion: 'Problem Solving', rubric: {...}}, {criterion: 'Communication', rubric: {...}}]`.
-    - **Output**: A fully detailed `curriculum_rounds` object for each round.
+2. **Research Company Node**
+   - **Input**: Company name from JobData
+   - **Method**: Gemini URL context with multiple sources
+   - **Sources**:
+     - LinkedIn company page
+     - Glassdoor reviews
+     - Company website (if available)
+   - **Action**:
+     - Build URLs from company name
+     - Single Gemini call with all URLs
+     - Extract interview process, culture, difficulty
+   - **Output**: CompanyContext object with confidence score
 
-5.  **Assemble & Save Curriculum (Step 5)**
-    - **Action**:
-        - Combine the overall curriculum plan with the detailed rounds.
-        - Create a new record in the `curricula` table.
-        - Create associated records in the `curriculum_rounds` table.
-        - Link back to the original `job_id`.
-    - **Output**: The `curriculum_id` of the newly created record.
+3. **Analyze Role Patterns Node**
+   - **Input**: JobData + CompanyContext
+   - **Method**: Gemini analysis (no URL needed)
+   - **Action**:
+     - Determine typical interview rounds for this level/role
+     - Identify focus areas based on requirements
+     - Suggest interview format based on company style
+   - **Output**: RolePatterns object
+
+4. **Design Structure Node**
+   - **Input**: All research data (JobData, CompanyContext, RolePatterns)
+   - **Method**: Gemini structured generation
+   - **Logic**:
+     - Entry-level: 3 rounds (Phone, Technical, Behavioral)
+     - Mid/Senior: 4-5 rounds (+ System Design)
+     - Staff/Principal: 5-6 rounds (+ Architecture, Leadership)
+   - **Output**: CurriculumStructure with round types
+
+5. **Generate Rounds Node**
+   - **Input**: CurriculumStructure + all context
+   - **Method**: Sequential generation per round type
+   - **For each round**:
+     - Generate interviewer persona
+     - Create 5-7 topics with 2-3 questions each
+     - Define evaluation rubric (3-5 criteria)
+   - **Output**: Array of Round objects
+
+6. **Evaluate Quality Node**
+   - **Input**: Generated rounds
+   - **Criteria**:
+     - Coverage of job requirements (>90%)
+     - Appropriate difficulty for level
+     - Clear evaluation criteria
+     - Realistic progression
+   - **Output**: Quality score (0-100)
+
+7. **Refine Rounds Node** (Conditional)
+   - **Triggers**: If quality < 80%
+   - **Action**: Re-generate weak areas identified
+   - **Limit**: Max 1 refinement attempt
+   - **Output**: Updated rounds
+
+8. **Save Curriculum Node**
+   - **Input**: Final curriculum with rounds
+   - **Action**:
+     - Save to `curricula` table
+     - Save rounds to `curriculum_rounds` table
+     - Update job record with curriculum ID
+   - **Output**: Curriculum ID
 
 ---
 
@@ -138,10 +169,11 @@ graph TD
 ## 4. Technical Requirements
 
 ### 4.1 Dependencies
-- **LLM Provider**: OpenAI (GPT-4-Turbo) or Anthropic (Claude 3 Opus) for high-quality generation.
-- **Database**: PostgreSQL with `pgvector` for potential future semantic search on topics.
-- **Job Scraper**: A reliable web scraping service (e.g., Browserless, Apify).
-- **Internal Data**: Access to the `companies`, `jobs`, and `interview_patterns` tables.
+- **LLM Provider**: Google Gemini 2.0 Flash (primary) with URL context capability
+- **Orchestration**: LangGraph for state management and flow control
+- **Database**: PostgreSQL (existing Supabase instance)
+- **No External Scrapers**: Gemini's URL context replaces traditional scraping
+- **Internal Data**: Access to `companies`, `jobs`, and `interview_patterns` tables
 
 ### 4.2 API Endpoints
 
