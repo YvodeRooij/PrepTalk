@@ -10,6 +10,14 @@ import {
   GeneratedRound,
 } from './types';
 
+// Import persona generation types
+import type {
+  InterviewerPersona,
+  StandardQuestion,
+  CandidatePrep,
+  NonTechnicalRoundType
+} from './nodes/persona-generation';
+
 // Define the state annotation for curriculum generation graph
 export const CurriculumStateAnnotation = Annotation.Root({
   // Input
@@ -56,6 +64,20 @@ export const CurriculumStateAnnotation = Annotation.Root({
     recentDevelopments: string[];
     competitivePositioning: string;
   }>,
+
+  // NEW: Non-Technical Persona Generation Phase Outputs
+  generatedPersonas: Annotation<InterviewerPersona[]>({
+    reducer: (old, new_) => new_ ?? old ?? [],
+    default: () => [],
+  }),
+  standardQuestionSets: Annotation<Record<NonTechnicalRoundType, StandardQuestion[]>>({
+    reducer: (old, new_) => ({ ...old, ...new_ }),
+    default: () => ({} as Record<NonTechnicalRoundType, StandardQuestion[]>),
+  }),
+  candidatePrepGuides: Annotation<Record<NonTechnicalRoundType, CandidatePrep>>({
+    reducer: (old, new_) => ({ ...old, ...new_ }),
+    default: () => ({} as Record<NonTechnicalRoundType, CandidatePrep>),
+  }),
 
   // Curriculum Phase Outputs
   structure: Annotation<CurriculumStructure>,

@@ -9,6 +9,18 @@
         "LangGraph JS:https://langchain-ai.github.io/langgraphjs/llms.txt"
       ],
       "env": {}
+    },
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase"
+      ],
+      "env": {
+        "SUPABASE_URL": "https://kbqayefhoknkvgzmaauc.supabase.co",
+        "SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImticWF5ZWZob2tua3Znem1hYXVjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgxMDI2NzAsImV4cCI6MjA3MzY3ODY3MH0.hWSUnlpLOqewzQBeXx2F7De3CA_ZcS7V0d6875pmjmw",
+        "SUPABASE_ACCESS_TOKEN": "sbp_82f765f0d08e98a438f606770c3bd89da9f13f6c"
+      }
     }
   }
 }

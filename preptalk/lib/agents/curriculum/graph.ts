@@ -18,6 +18,11 @@ import {
   analyzeRole
 } from './nodes/research';
 import {
+  generateDynamicPersonas,
+  generateStandardQuestions,
+  generateCandidatePrep
+} from './nodes/persona-generation';
+import {
   designStructure,
   generateRounds,
   evaluateQualityWithRouting,
@@ -26,6 +31,11 @@ import {
 import {
   saveCurriculum
 } from './nodes/persistence';
+
+// Import LLM provider service
+import { LLMProviderService } from '../../providers/llm-provider-service';
+import { DEFAULT_LLM_CONFIG } from '../../config/llm-config';
+import { loadLLMConfig } from '../../config/env-config';
 
 // Cache validation results to avoid checking every time
 let schemaValidationCache: { validated: boolean; timestamp: number } | null = null;
@@ -39,6 +49,7 @@ export interface CurriculumAgentOptions {
 export class CurriculumAgent {
   private graph: ReturnType<typeof StateGraph.prototype.compile>;
   private initializationPromise: Promise<void> | null = null;
+  private llmProvider: LLMProviderService;
 
   constructor(
     private supabase: ReturnType<typeof createClient>,
@@ -47,6 +58,12 @@ export class CurriculumAgent {
   ) {
     // Set API key for node functions to use
     process.env.GOOGLE_AI_API_KEY = apiKey;
+
+    // Initialize LLM provider service with configuration
+    const llmConfig = loadLLMConfig();
+    this.llmProvider = new LLMProviderService(llmConfig);
+
+    console.log(`🤖 LLM Provider initialized with: ${llmConfig.primaryProvider} (fallbacks: ${llmConfig.fallbackProviders.join(', ')})`);
 
     // Initialize asynchronously
     this.initializationPromise = this.initialize();
@@ -104,6 +121,11 @@ export class CurriculumAgent {
       .addNode("parse_job", parseJob)
       .addNode("analyze_role", analyzeRole)
 
+      // NEW: Non-Technical Persona Generation Phase
+      .addNode("generate_personas", (state) => this.wrapWithProvider(generateDynamicPersonas)(state))
+      .addNode("generate_questions", (state) => this.wrapWithProvider(generateStandardQuestions)(state))
+      .addNode("generate_prep_guides", (state) => this.wrapWithProvider(generateCandidatePrep)(state))
+
       // Generation Phase
       .addNode("design_structure", designStructure)
       .addNode("generate_rounds", generateRounds)
@@ -120,7 +142,11 @@ export class CurriculumAgent {
       // validate_sources uses Command to route to merge_research or fallback
       .addEdge("merge_research", "parse_job")
       .addEdge("parse_job", "analyze_role")
-      .addEdge("analyze_role", "design_structure")
+      // NEW: Insert persona generation after research, before curriculum design
+      .addEdge("analyze_role", "generate_personas")
+      .addEdge("generate_personas", "generate_questions")
+      .addEdge("generate_questions", "generate_prep_guides")
+      .addEdge("generate_prep_guides", "design_structure")
       .addEdge("design_structure", "generate_rounds")
       .addEdge("generate_rounds", "evaluate_quality")
       // evaluate_quality uses Command to route to save or refine
@@ -132,6 +158,19 @@ export class CurriculumAgent {
       .addEdge("fallback_research", "parse_job");
 
     return workflow.compile();
+  }
+
+  /**
+   * Wraps node functions with LLM provider service for multi-provider support
+   */
+  private wrapWithProvider<T extends (...args: any[]) => any>(nodeFunction: T): T {
+    return (async (...args: Parameters<T>) => {
+      const [state] = args;
+      const enhancedConfig = {
+        llmProvider: this.llmProvider
+      };
+      return await nodeFunction(state, enhancedConfig);
+    }) as T;
   }
 
   // Fallback node for when source validation fails

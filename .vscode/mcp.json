@@ -2,7 +2,11 @@
 	"servers": {
 		"supabase": {
 			"url": "https://server.smithery.ai/@supabase-community/supabase-mcp/mcp",
-			"type": "http"
+			"type": "http",
+			"env": {
+				"SUPABASE_URL": "https://kbqayefhoknkvgzmaauc.supabase.co",
+				"SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImticWF5ZWZob2tua3Znem1hYXVjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgxMDI2NzAsImV4cCI6MjA3MzY3ODY3MH0.hWSUnlpLOqewzQBeXx2F7De3CA_ZcS7V0d6875pmjmw"
+			}
 		},
 		"context7": {
 			"url": "https://server.smithery.ai/@upstash/context7-mcp/mcp",
