@@ -43,6 +43,18 @@ export const CurriculumStateAnnotation = Annotation.Root({
     difficultyRating: string;
     preparationTime: string;
     keyInsights: string[];
+    // NEW: Enhanced competitive intelligence
+    competitiveContext?: string;
+    marketTrends?: string[];
+  }>,
+
+  // NEW: Competitive Intelligence Phase Output
+  competitiveIntelligence: Annotation<{
+    primaryCompetitors: string[];
+    roleComparison: string;
+    strategicAdvantages: string[];
+    recentDevelopments: string[];
+    competitivePositioning: string;
   }>,
 
   // Curriculum Phase Outputs

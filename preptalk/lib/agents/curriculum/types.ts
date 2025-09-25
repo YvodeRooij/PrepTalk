@@ -1,5 +1,39 @@
 // Curriculum Agent Types with Enhanced Quality & Tracking
 
+// NEW: Enhanced Competitive Intelligence Types
+export interface CompetitiveIntelligence {
+  primaryCompetitors: string[];
+  roleComparison: string;
+  strategicAdvantages: string[];
+  recentDevelopments: string[];
+  competitivePositioning: string;
+}
+
+export interface EnhancedMarketIntelligence {
+  salaryRange: string;
+  difficultyRating: string;
+  preparationTime: string;
+  keyInsights: string[];
+  // NEW enhanced fields
+  competitiveContext?: string;
+  marketTrends?: string[];
+}
+
+// Database storage interface for role intelligence
+export interface RoleIntelligence {
+  role_vs_competitors: string | null;
+  recent_role_developments: string[];
+  strategic_advantages: string[];
+  market_context: {
+    salary_range: string | null;
+    difficulty_rating: string | null;
+    preparation_time: string | null;
+    key_insights: string[];
+  };
+  competitive_positioning: string | null;
+  generated_at: string | null;
+}
+
 export interface JobInput {
   url?: string;
   description?: string;
