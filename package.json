@@ -1,4 +1,12 @@
 {
+  "name": "PrepTalk",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix preptalk",
+    "build": "npm run build --prefix preptalk",
+    "start": "npm run start --prefix preptalk",
+    "lint": "npm run lint --prefix preptalk"
+  },
   "dependencies": {
     "claude": "^0.1.2",
     "code": "^5.2.4"

@@ -1,10 +1,10 @@
 // Curriculum Generation Nodes - Structure, rounds, and quality
 // Pure functions for curriculum creation
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Command } from '@langchain/langgraph';
 import { CurriculumState } from '../state';
 import { CurriculumStructure, GeneratedRound, Question, RoundDefinition, RoundTopic } from '../types';
+import { StructureResponseSchema, RoundContentResponseSchema, QualityEvaluationSchema } from '../schemas';
 
 type StructureResponse = Pick<CurriculumStructure, 'total_rounds' | 'difficulty_level' | 'rounds'> & {
   rounds: RoundDefinition[];
@@ -23,31 +23,18 @@ type RoundContentResponse = {
   closing_script?: string;
 };
 
-// Initialize lazily to ensure env vars are loaded
-let genAI: GoogleGenerativeAI | null = null;
-
-function getGenAI(): GoogleGenerativeAI {
-  if (!genAI) {
-    const apiKey = process.env.GOOGLE_AI_API_KEY;
-    if (!apiKey) {
-      throw new Error('GOOGLE_AI_API_KEY is not set in environment variables');
-    }
-    genAI = new GoogleGenerativeAI(apiKey);
-  }
-  return genAI;
-}
+// No longer using direct Gemini instantiation - using LLM provider service
 
 /**
  * Node: Design curriculum structure based on research
  */
-export async function designStructure(state: CurriculumState): Promise<Partial<CurriculumState>> {
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.4,
-    }
-  });
+export async function designStructure(
+  state: CurriculumState,
+  config?: { llmProvider?: any }
+): Promise<Partial<CurriculumState>> {
+  if (!config?.llmProvider) {
+    throw new Error('LLM provider is required for designStructure');
+  }
 
   if (!state.jobData || !state.rolePatterns) {
     return {
@@ -55,9 +42,10 @@ export async function designStructure(state: CurriculumState): Promise<Partial<C
     };
   }
 
-  const result = await model.generateContent([
-    {
-      text: `Design interview curriculum structure for:
+  const structure = await config.llmProvider.generateStructured(
+    StructureResponseSchema,
+    'quality_evaluation',
+    `Design interview curriculum structure for:
 
       Role: ${state.jobData.title} (${state.jobData.level})
       Company: ${state.companyContext?.name || 'Unknown'}
@@ -72,10 +60,7 @@ export async function designStructure(state: CurriculumState): Promise<Partial<C
       - total_rounds: number
       - difficulty_level: beginner/intermediate/advanced/expert
       - rounds: array of round definitions`
-    }
-  ]);
-
-  const structure = JSON.parse(result.response.text()) as StructureResponse;
+  );
   const rounds = structure.rounds ?? [];
   const estimatedTotalMinutes = rounds.reduce((sum, round) => sum + (round.duration_minutes ?? 0), 0);
 
@@ -93,14 +78,13 @@ export async function designStructure(state: CurriculumState): Promise<Partial<C
 /**
  * Node: Generate detailed content for each round
  */
-export async function generateRounds(state: CurriculumState): Promise<Partial<CurriculumState>> {
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.6,
-    }
-  });
+export async function generateRounds(
+  state: CurriculumState,
+  config?: { llmProvider?: any }
+): Promise<Partial<CurriculumState>> {
+  if (!config?.llmProvider) {
+    throw new Error('LLM provider is required for generateRounds');
+  }
 
   if (!state.structure || !state.jobData) {
     return {
@@ -111,9 +95,10 @@ export async function generateRounds(state: CurriculumState): Promise<Partial<Cu
   const rounds: GeneratedRound[] = [];
 
   for (const roundDef of state.structure.rounds) {
-    const result = await model.generateContent([
-      {
-        text: `Generate detailed interview round content:
+    const content = await config.llmProvider.generateStructured(
+      RoundContentResponseSchema,
+      'question_generation',
+      `Generate detailed interview round content:
 
         Round: ${roundDef.title} (${roundDef.type})
         Duration: ${roundDef.duration_minutes} minutes
@@ -126,10 +111,7 @@ export async function generateRounds(state: CurriculumState): Promise<Partial<Cu
         - evaluation_criteria: array of { criterion, weight, rubric }
         - opening_script: string
         - closing_script: string`
-      }
-    ]);
-
-    const content = JSON.parse(result.response.text()) as RoundContentResponse;
+    );
     const rawTopics = content.topics ?? [];
     const topicsToCover: RoundTopic[] = rawTopics.map((topic) => ({
       topic: topic.topic,
@@ -166,14 +148,16 @@ export async function generateRounds(state: CurriculumState): Promise<Partial<Cu
 /**
  * Node: Evaluate quality and route with Command (v1.0 pattern)
  */
-export async function evaluateQualityWithRouting(state: CurriculumState): Promise<Command> {
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.3,
-    }
-  });
+export async function evaluateQualityWithRouting(
+  state: CurriculumState,
+  config?: { llmProvider?: any }
+): Promise<Command> {
+  if (!config?.llmProvider) {
+    return new Command({
+      update: { errors: ['LLM provider is required for evaluateQualityWithRouting'] },
+      goto: 'save_curriculum', // Skip to save with error
+    });
+  }
 
   if (!state.rounds || !state.jobData) {
     return new Command({
@@ -182,9 +166,10 @@ export async function evaluateQualityWithRouting(state: CurriculumState): Promis
     });
   }
 
-  const result = await model.generateContent([
-    {
-      text: `Evaluate interview curriculum quality:
+  const evaluation = await config.llmProvider.generateStructured(
+    QualityEvaluationSchema,
+    'quality_evaluation',
+    `Evaluate interview curriculum quality:
 
       Job: ${state.jobData.title} at ${state.companyContext?.name}
       Level: ${state.jobData.level}
@@ -200,10 +185,7 @@ export async function evaluateQualityWithRouting(state: CurriculumState): Promis
       Return JSON with:
       - overall_score: 0-100
       - weak_areas: array of areas needing improvement`
-    }
-  ]);
-
-  const evaluation = JSON.parse(result.response.text());
+  );
   const quality = evaluation.overall_score || 75;
 
   // Use Command to route based on quality
@@ -223,7 +205,10 @@ export async function evaluateQualityWithRouting(state: CurriculumState): Promis
 /**
  * Node: Refine weak areas in curriculum
  */
-export async function refineRounds(state: CurriculumState): Promise<Partial<CurriculumState>> {
+export async function refineRounds(
+  state: CurriculumState,
+  config?: { llmProvider?: any }
+): Promise<Partial<CurriculumState>> {
   // Re-generate rounds with higher temperature for variety
-  return generateRounds(state);
+  return generateRounds(state, config);
 }

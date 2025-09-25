@@ -13,9 +13,12 @@ import { analyzeRole } from '../nodes/research';
 import { saveCurriculum } from '../nodes/persistence';
 import type { CurriculumState } from '../state';
 import type { ParsedJob, CompanyContext } from '../types';
+import { LLMProviderService } from '../../../providers/llm-provider-service';
+import { DEFAULT_LLM_CONFIG } from '../../../config/llm-config';
 
 class E2ETestRunner {
   private testResults: Array<{ name: string; status: 'PASS' | 'FAIL'; error?: string }> = [];
+  private llmProvider: LLMProviderService;
 
   async test(name: string, testFn: () => void | Promise<void>) {
     console.log(`🧪 Testing: ${name}`);
@@ -36,6 +39,9 @@ class E2ETestRunner {
 
   async runAllTests() {
     console.log('🚀 Running End-to-End Competitive Intelligence Tests\n');
+
+    // Initialize LLM Provider
+    this.llmProvider = new LLMProviderService(DEFAULT_LLM_CONFIG);
 
     await this.test('Full pipeline should preserve competitive intelligence data', async () => {
       // Mock realistic input state (as would come from job parsing)
@@ -104,7 +110,9 @@ class E2ETestRunner {
       console.log('   → Testing analyzeRole function...');
 
       // This will make real API calls if GOOGLE_AI_API_KEY is set, otherwise should fallback
-      const researchResult = await analyzeRole(inputState);
+      const researchResult = await analyzeRole(inputState, {
+        llmProvider: this.llmProvider
+      });
 
       // Validate research results
       assert(researchResult.marketIntelligence, 'Should return market intelligence');

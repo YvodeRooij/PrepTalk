@@ -3,20 +3,39 @@
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { LLMConfig, ModelConfig, getOptimalProvider, calculateEstimatedCost } from '../config/llm-config';
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 
-// Conditional imports to handle missing dependencies gracefully
-let OpenAI: any;
-try {
-  OpenAI = require('openai');
-} catch (e) {
-  console.warn('OpenAI package not installed. OpenAI provider will not be available.');
-}
+// Provider-specific model mappings
+const PROVIDER_MODEL_MAP = {
+  gemini: {
+    // Map all tasks to appropriate Gemini models
+    default: 'gemini-2.5-flash', // Fast for most tasks
+    quality_evaluation: 'gemini-2.5-pro', // More thorough for evaluation
+    company_research: 'gemini-2.5-pro', // Better for complex research
+  },
+  openai: {
+    // Use the configured OpenAI model for all tasks
+    default: 'gpt-4.1-mini',
+  },
+  anthropic: {
+    // Single Claude model for all tasks
+    default: 'claude-sonnet-3.5',
+  },
+  grok: {
+    // Grok model when available
+    default: 'grok-3',
+  }
+} as const;
 
-let Anthropic: any;
-try {
-  Anthropic = require('@anthropic-ai/sdk');
-} catch (e) {
-  console.warn('Anthropic package not installed. Anthropic provider will not be available.');
+// Helper function to get the correct model name for a provider
+function getProviderModel(provider: string, task: string): string {
+  const providerModels = PROVIDER_MODEL_MAP[provider as keyof typeof PROVIDER_MODEL_MAP];
+  if (!providerModels) {
+    throw new Error(`Unknown provider: ${provider}`);
+  }
+
+  return providerModels[task as keyof typeof providerModels] || providerModels.default;
 }
 
 export interface GenerationOptions {
@@ -24,6 +43,18 @@ export interface GenerationOptions {
   systemPrompt?: string;
   context?: any;
   retryCount?: number;
+}
+
+// OOTB Structured Output Integration - TDD Implementation
+import { z } from 'zod';
+import { ChatOpenAI } from '@langchain/openai';
+import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
+import { ChatAnthropic } from '@langchain/anthropic';
+
+export interface StructuredGenerationOptions {
+  systemPrompt?: string;
+  temperature?: number;
+  maxRetries?: number;
 }
 
 export interface GenerationResult {
@@ -64,21 +95,21 @@ export class LLMProviderService {
   }
 
   private initializeProviders(): void {
-    // Initialize Gemini
+    // Initialize Gemini (primary)
     if (process.env.GOOGLE_AI_API_KEY) {
       this.providers.set('gemini', new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY));
     }
 
-    // Initialize OpenAI
-    if (OpenAI && process.env.OPENAI_API_KEY) {
+    // Initialize OpenAI (fallback)
+    if (process.env.OPENAI_API_KEY) {
       this.providers.set('openai', new OpenAI({
         apiKey: process.env.OPENAI_API_KEY,
         maxRetries: 0 // We handle retries ourselves
       }));
     }
 
-    // Initialize Anthropic
-    if (Anthropic && process.env.ANTHROPIC_API_KEY) {
+    // Initialize Anthropic (fallback)
+    if (process.env.ANTHROPIC_API_KEY) {
       this.providers.set('anthropic', new Anthropic({
         apiKey: process.env.ANTHROPIC_API_KEY
       }));
@@ -86,7 +117,6 @@ export class LLMProviderService {
 
     // Initialize Grok (when available)
     if (process.env.GROK_API_KEY) {
-      // Grok implementation would go here
       console.log('Grok provider configured (implementation pending)');
     }
 
@@ -127,6 +157,14 @@ export class LLMProviderService {
     // Remove duplicates while preserving order
     providers = [...new Set(providers)];
 
+    // Filter to only available providers
+    providers = providers.filter(p => this.providers.has(p));
+
+    // If no providers are available, throw error
+    if (providers.length === 0) {
+      throw new Error(`No available providers for task ${task}. Available: ${Array.from(this.providers.keys()).join(', ')}`);
+    }
+
     let lastError: Error | null = null;
 
     for (const providerName of providers) {
@@ -145,7 +183,7 @@ export class LLMProviderService {
         }
 
         // Attempt generation
-        const result = await this.callProvider(providerName, modelConfig, prompt, options);
+        const result = await this.callProvider(providerName, modelConfig, prompt, options, task);
 
         // Update stats
         this.updateStats(providerName, result, true);
@@ -176,11 +214,89 @@ export class LLMProviderService {
     throw new Error(`All providers failed. Last error: ${lastError?.message}`);
   }
 
+  /**
+   * OOTB Structured Output Generation - KISS/DRY/OOTB with LangChain
+   * Uses each provider's native structured output capabilities
+   */
+  async generateStructured<T>(
+    schema: z.ZodSchema<T>,
+    task: keyof LLMConfig['models'],
+    prompt: string,
+    options: StructuredGenerationOptions = {}
+  ): Promise<T> {
+    const modelConfig = this.config.models[task];
+    const provider = getOptimalProvider(task, this.config);
+
+    try {
+      // Create LangChain model based on optimal provider
+      let llmModel;
+
+      switch (provider) {
+        case 'openai':
+          if (!process.env.OPENAI_API_KEY) throw new Error('OpenAI API key not configured');
+          llmModel = new ChatOpenAI({
+            model: getProviderModel('openai', task),
+            temperature: options.temperature ?? 0,
+            apiKey: process.env.OPENAI_API_KEY,
+            maxRetries: options.maxRetries ?? 3
+          });
+          break;
+
+        case 'gemini':
+          if (!process.env.GOOGLE_AI_API_KEY) throw new Error('Gemini API key not configured');
+          llmModel = new ChatGoogleGenerativeAI({
+            model: getProviderModel('gemini', task),
+            temperature: options.temperature ?? 0,
+            apiKey: process.env.GOOGLE_AI_API_KEY,
+            maxRetries: options.maxRetries ?? 3
+          });
+          break;
+
+        case 'anthropic':
+          if (!process.env.ANTHROPIC_API_KEY) throw new Error('Anthropic API key not configured');
+          llmModel = new ChatAnthropic({
+            model: getProviderModel('anthropic', task),
+            temperature: options.temperature ?? 0,
+            anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+            maxRetries: options.maxRetries ?? 3
+          });
+          break;
+
+        default:
+          throw new Error(`Unsupported provider for structured outputs: ${provider}`);
+      }
+
+      // Create structured model using LangChain's OOTB method
+      const structuredModel = llmModel.withStructuredOutput(schema, {
+        name: `${task}_structured_output`,
+        includeRaw: false // Only return parsed result
+      });
+
+      // Build messages array
+      const messages = [];
+      if (options.systemPrompt) {
+        messages.push(['system', options.systemPrompt]);
+      }
+      messages.push(['human', prompt]);
+
+      // Generate structured output
+      const result = await structuredModel.invoke(messages);
+
+      // Validate result against schema (additional safety)
+      return schema.parse(result);
+
+    } catch (error) {
+      console.error(`Structured output generation failed with ${provider}:`, error);
+      throw new Error(`Structured output failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
   private async callProvider(
     providerName: string,
     config: ModelConfig,
     prompt: string,
-    options: GenerationOptions
+    options: GenerationOptions,
+    task?: string
   ): Promise<GenerationResult> {
     const startTime = Date.now();
     const provider = this.providers.get(providerName);
@@ -189,22 +305,25 @@ export class LLMProviderService {
       throw new Error(`Provider ${providerName} not initialized`);
     }
 
+    // Get the correct model for this provider
+    const providerModel = getProviderModel(providerName, task || 'default');
+
     let result: any;
     let tokensUsed = 0;
 
     switch (providerName) {
       case 'gemini':
-        result = await this.callGemini(provider, config, prompt, options);
+        result = await this.callGemini(provider, { ...config, model: providerModel }, prompt, options);
         tokensUsed = result.response?.usageMetadata?.totalTokenCount || 0;
         break;
 
       case 'openai':
-        result = await this.callOpenAI(provider, config, prompt, options);
+        result = await this.callOpenAI(provider, { ...config, model: providerModel }, prompt, options);
         tokensUsed = result.usage?.total_tokens || 0;
         break;
 
       case 'anthropic':
-        result = await this.callAnthropic(provider, config, prompt, options);
+        result = await this.callAnthropic(provider, { ...config, model: providerModel }, prompt, options);
         tokensUsed = result.usage?.output_tokens || 0;
         break;
 
@@ -219,7 +338,7 @@ export class LLMProviderService {
     return {
       content: this.extractContent(result, providerName),
       provider: providerName,
-      model: config.model,
+      model: providerModel, // Use the actual model that was called
       tokensUsed,
       costCents,
       latencyMs,
@@ -298,6 +417,7 @@ export class LLMProviderService {
         throw new Error(`Unknown provider: ${provider}`);
     }
   }
+
 
   private getCachedResult(task: string, prompt: string, options: GenerationOptions): GenerationResult | null {
     const cacheKey = this.generateCacheKey(task, prompt, options);
@@ -395,7 +515,3 @@ export class LLMProviderService {
     return { ...this.config };
   }
 }
-
-`★ Insight ─────────────────────────────────────`
-Smart architecture: The provider service handles failures gracefully, tracks costs automatically, and optimizes provider selection based on task requirements. This gives us true multi-provider flexibility without vendor lock-in.
-`─────────────────────────────────────────────────`

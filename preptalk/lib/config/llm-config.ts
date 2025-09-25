@@ -66,11 +66,11 @@ export interface LLMConfig {
 
 // Default configuration optimized for curriculum generation
 export const DEFAULT_LLM_CONFIG: LLMConfig = {
-  primaryProvider: 'gemini',
-  fallbackProviders: ['openai', 'anthropic'],
+  primaryProvider: 'openai',
+  fallbackProviders: ['gemini', 'anthropic'],
 
   models: {
-    // Job parsing: High accuracy, low creativity
+    // Job parsing: Use Gemini for URL context support
     job_parsing: {
       provider: 'gemini',
       model: 'gemini-2.5-flash',
@@ -78,42 +78,42 @@ export const DEFAULT_LLM_CONFIG: LLMConfig = {
       maxTokens: 2000
     },
 
-    // Company research: Balanced accuracy and context understanding
+    // Company research: Use Gemini for URL context and search
     company_research: {
       provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      model: 'gemini-2.5-pro',
       temperature: 0.3,
       maxTokens: 4000
     },
 
     // Persona generation: High creativity for realistic characters
     persona_generation: {
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
       temperature: 0.7,
       maxTokens: 3000
     },
 
     // Question generation: Moderate creativity for varied questions
     question_generation: {
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
       temperature: 0.6,
       maxTokens: 2500
     },
 
     // Candidate prep: High creativity for engaging examples
     candidate_prep: {
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
       temperature: 0.8,
       maxTokens: 3500
     },
 
     // Quality evaluation: Low creativity for consistent scoring
     quality_evaluation: {
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
       temperature: 0.2,
       maxTokens: 1500
     }

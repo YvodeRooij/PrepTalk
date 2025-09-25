@@ -1,9 +1,9 @@
 // Research Phase Nodes - Job parsing and role analysis
 // Pure functions that transform state
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { CurriculumState } from '../state';
 import { ParsedJob, RolePattern } from '../types';
+import { ParsedJobSchema, EnhancedRoleAnalysisSchema } from '../schemas';
 
 // Build URL context tool configuration
 function hasValidUrls(urls: string[] | undefined): boolean {
@@ -18,78 +18,20 @@ function formatUrlsForPrompt(urls: string[]): string {
   return `\n\nAnalyze content from these URLs:\n${validUrls.map(url => `- ${url}`).join('\n')}`;
 }
 
-function safeParseJson<T>(raw: string, context: string, fallback?: T): T {
-  let text = raw.trim();
+// safeParseJson function removed - now using OOTB structured outputs
 
-  // Check if response is clearly not JSON (starts with "I apologize" etc.)
-  if (text.startsWith('I apologize') || text.startsWith('I cannot') || text.startsWith('Sorry')) {
-    console.warn(`LLM returned apologetic response instead of JSON for ${context}:`, text.substring(0, 200));
-    if (fallback !== undefined) return fallback;
-    throw new Error(`LLM returned non-JSON response for ${context}`);
-  }
-
-  // Remove markdown code blocks
-  text = text.replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim();
-
-  // Try to find the first complete JSON object
-  let startIndex = text.indexOf('{');
-  if (startIndex !== -1) {
-    let braceCount = 0;
-    let endIndex = startIndex;
-
-    for (let i = startIndex; i < text.length; i++) {
-      if (text[i] === '{') braceCount++;
-      if (text[i] === '}') braceCount--;
-      if (braceCount === 0) {
-        endIndex = i;
-        break;
-      }
-    }
-
-    if (braceCount === 0) {
-      text = text.substring(startIndex, endIndex + 1);
-    }
-  }
-
-  try {
-    return JSON.parse(text) as T;
-  } catch (error) {
-    console.warn(`JSON parsing failed for ${context}:`, {
-      rawResponse: raw.substring(0, 300) + '...',
-      cleanedText: text.substring(0, 200),
-      error: error instanceof Error ? error.message : 'Unknown error'
-    });
-
-    if (fallback !== undefined) return fallback;
-    throw new Error(`Failed to parse JSON for ${context}: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-}
-
-// Initialize lazily to ensure env vars are loaded
-let genAI: GoogleGenerativeAI | null = null;
-
-function getGenAI(): GoogleGenerativeAI {
-  if (!genAI) {
-    const apiKey = process.env.GOOGLE_AI_API_KEY;
-    if (!apiKey) {
-      throw new Error('GOOGLE_AI_API_KEY is not set in environment variables');
-    }
-    genAI = new GoogleGenerativeAI(apiKey);
-  }
-  return genAI;
-}
+// No longer using direct Gemini instantiation - using LLM provider service
 
 /**
  * Node: Parse job from discovered sources or direct URL
  */
-export async function parseJob(state: CurriculumState): Promise<Partial<CurriculumState>> {
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: {
-      temperature: 0.3,
-      // Note: Can't use responseMimeType with tools
-    }
-  });
+export async function parseJob(
+  state: CurriculumState,
+  config?: { llmProvider?: any }
+): Promise<Partial<CurriculumState>> {
+  if (!config?.llmProvider) {
+    throw new Error('LLM provider is required for parseJob');
+  }
 
   // Use the best source data we have
   const bestSource = state.discoveredSources
@@ -139,22 +81,12 @@ Return ONLY a valid JSON object (no markdown, no explanation) with these exact f
       prompt += `\n\nJob posting URL to analyze: ${jobUrl}`;
     }
 
-    // Build request with URL context tool if needed
-    const request: any = {
-      contents: [{
-        role: 'user',
-        parts: [{ text: prompt }]
-      }]
-    };
-
-    // Add URL context tool if we have a valid URL
-    if (useUrlContext) {
-      request.tools = [{ url_context: {} }];
-    }
-
-    const result = await model.generateContent(request);
-
-    const jobData = safeParseJson<ParsedJob>(result.response.text(), 'job parsing');
+    // Use LLM provider service for structured generation
+    const jobData = await config.llmProvider.generateStructured(
+      ParsedJobSchema,
+      'job_parsing',
+      prompt
+    );
 
     return {
       jobData: {
@@ -175,13 +107,13 @@ Return ONLY a valid JSON object (no markdown, no explanation) with these exact f
 /**
  * Node: Enhanced role analysis with Google Search + URL Context
  */
-export async function analyzeRole(state: CurriculumState): Promise<Partial<CurriculumState>> {
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: {
-      temperature: 0.5,
-    }
-  });
+export async function analyzeRole(
+  state: CurriculumState,
+  config?: { llmProvider?: any }
+): Promise<Partial<CurriculumState>> {
+  if (!config?.llmProvider) {
+    throw new Error('LLM provider is required for analyzeRole');
+  }
 
   if (!state.jobData) {
     return {
@@ -256,21 +188,12 @@ Based on your research findings, return ONLY a valid JSON object with both basic
   }
 }`;
 
-    // Use both Google Search and URL Context for comprehensive research
-    const request: any = {
-      contents: [{
-        role: 'user',
-        parts: [{ text: prompt }]
-      }],
-      tools: [
-        { googleSearch: {} },
-        { url_context: {} }
-      ]
-    };
-
-    const result = await model.generateContent(request);
-
-    const enhancedPatterns = safeParseJson<any>(result.response.text(), 'enhanced role analysis');
+    // Use LLM provider service for comprehensive research
+    const enhancedPatterns = await config.llmProvider.generateStructured(
+      EnhancedRoleAnalysisSchema,
+      'company_research',
+      prompt
+    );
 
     // Update company context with research findings
     const enhancedCompanyContext = {

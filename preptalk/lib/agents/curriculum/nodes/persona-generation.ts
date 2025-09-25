@@ -3,6 +3,12 @@
 
 import { CurriculumState } from '../state';
 import { LLMProviderService } from '../../providers/llm-provider-service';
+import {
+  InterviewerPersonaSchema,
+  StandardQuestionSchema,
+  CandidatePrepSchema
+} from '../schemas';
+import { z } from 'zod';
 
 // Types for persona generation system
 export interface InterviewerPersona {
@@ -56,6 +62,142 @@ export type NonTechnicalRoundType =
   | 'strategic_role_discussion'
   | 'executive_final';
 
+// Personalization helper functions for adaptive question generation
+function buildPersonalizationContext(userProfile: any, roundType: NonTechnicalRoundType): string {
+  if (!userProfile) return '';
+
+  let context = '';
+
+  // Add user context for personalized questions
+  if (userProfile.excitement || userProfile.concerns || userProfile.weakAreas || userProfile.backgroundContext) {
+    context += 'PERSONALIZATION CONTEXT:\n';
+
+    if (userProfile.excitement) {
+      context += `- EXCITEMENT: ${userProfile.excitement}\n`;
+    }
+    if (userProfile.concerns) {
+      context += `- CONCERNS: ${userProfile.concerns}\n`;
+    }
+    if (userProfile.weakAreas?.length) {
+      context += `- WEAK AREAS TO PRACTICE: ${userProfile.weakAreas.join(', ')}\n`;
+    }
+    if (userProfile.backgroundContext) {
+      context += `- BACKGROUND: ${userProfile.backgroundContext}\n`;
+    }
+    if (userProfile.preparationGoals) {
+      context += `- PREPARATION GOALS: ${userProfile.preparationGoals}\n`;
+    }
+    context += '\n';
+  }
+
+  return context;
+}
+
+function getAdaptationStrategy(userProfile: any, roundType: NonTechnicalRoundType): string {
+  if (!userProfile) return '';
+
+  let strategy = 'ADAPTATION STRATEGY:\n';
+
+  // Round-specific personalization strategies
+  switch (roundType) {
+    case 'recruiter_screen':
+      strategy += '- Create confidence-building questions that let candidate practice their transition story\n';
+      strategy += '- Include questions that allow showcasing excitement about the company\n';
+      break;
+    case 'behavioral_deep_dive':
+      strategy += '- Focus questions on areas candidate wants to practice (from weak areas)\n';
+      strategy += '- Create bridge questions connecting their background to new role requirements\n';
+      break;
+    case 'culture_values_alignment':
+      strategy += '- Address concerns constructively through values-based scenarios\n';
+      strategy += '- Generate questions that demonstrate cultural research knowledge\n';
+      break;
+    case 'strategic_role_discussion':
+      strategy += '- Leverage candidate\'s background for strategic thinking questions\n';
+      strategy += '- Create opportunities to weave in competitive intelligence naturally\n';
+      break;
+    case 'executive_final':
+      strategy += '- Synthesize candidate\'s unique value proposition through questions\n';
+      strategy += '- Focus on vision and contribution based on their background\n';
+      break;
+  }
+
+  if (userProfile.concerns) {
+    strategy += '- Frame questions to address stated concerns positively\n';
+  }
+  if (userProfile.weakAreas?.length) {
+    strategy += `- Include more practice opportunities for: ${userProfile.weakAreas.join(', ')}\n`;
+  }
+
+  strategy += '\n';
+  return strategy;
+}
+
+function getUserPersonalizationContext(userProfile: any): string {
+  if (!userProfile) return '';
+
+  let context = '';
+
+  // Handle new rich text format
+  if (userProfile.excitement || userProfile.concerns || userProfile.weakAreas || userProfile.backgroundContext) {
+    context += '\nCANDIDATE CONTEXT (adapt your persona style accordingly):\n';
+    if (userProfile.excitement) {
+      context += `- EXCITEMENT: ${userProfile.excitement}\n`;
+    }
+    if (userProfile.concerns) {
+      context += `- CONCERNS: ${userProfile.concerns}\n`;
+    }
+    if (userProfile.weakAreas?.length) {
+      context += `- WEAK AREAS TO PRACTICE: ${userProfile.weakAreas.join(', ')}\n`;
+    }
+    if (userProfile.backgroundContext) {
+      context += `- BACKGROUND: ${userProfile.backgroundContext}\n`;
+    }
+    return context;
+  }
+
+  // Handle legacy enum format for backwards compatibility
+  if (userProfile.focusArea || userProfile.concern) {
+    context += '\nCANDIDATE CONTEXT (adapt your persona style accordingly):\n';
+    context += `- Focus Area: ${userProfile.focusArea?.replace('_', ' ') || 'general'} - candidate wants to practice this\n`;
+    context += `- Main Concern: ${userProfile.concern?.replace('_', ' ') || 'general preparation'} - candidate is worried about this\n`;
+    if (userProfile.background) {
+      context += `- Background: ${userProfile.background}\n`;
+    }
+    return context;
+  }
+
+  return '';
+}
+
+function getFriendlyStyle(userProfile: any): string {
+  if (!userProfile) return 'professional and supportive';
+
+  // For new rich text format
+  if (userProfile.concerns) {
+    if (userProfile.concerns.includes('nervous') || userProfile.concerns.includes('anxious')) {
+      return 'encouraging and confidence-building';
+    }
+    if (userProfile.concerns.includes('technology') || userProfile.concerns.includes('technical')) {
+      return 'patient and bridging technical concepts';
+    }
+    return 'supportive and understanding';
+  }
+
+  // For legacy format
+  if (userProfile.concern) {
+    switch (userProfile.concern) {
+      case 'industry_knowledge': return 'patient and informative';
+      case 'leadership_experience': return 'encouraging and confidence-building';
+      case 'culture_fit': return 'warm and inclusive';
+      case 'role_complexity': return 'supportive and clarifying';
+      default: return 'professional and supportive';
+    }
+  }
+
+  return 'professional and supportive';
+}
+
 /**
  * Node: Generate dynamic interviewer personas using competitive intelligence
  * TDD GREEN: Make the failing tests pass
@@ -104,11 +246,14 @@ JOB DETAILS:
 - Level: ${jobData.level}
 - Company: ${jobData.company_name}
 
+${getUserPersonalizationContext(state.userProfile)}
+
 Create a realistic persona who:
 1. Works at ${jobData.company_name} and understands these competitive advantages
 2. Has lived through recent company developments
 3. Asks standard interview questions but recognizes competitive intelligence in answers
 4. Has an appropriate seniority level for this interview round
+${state.userProfile ? `5. ADAPTS QUESTIONING STYLE: Is ${getFriendlyStyle(state.userProfile)} toward candidates with their concerns/background` : ''}
 
 Return ONLY a JSON object with this structure:
 {
@@ -122,18 +267,26 @@ Return ONLY a JSON object with this structure:
 }`;
 
     try {
-      const llmProvider = config.llmProvider;
-      const personaResponse = await llmProvider?.generateContent(
+      // OOTB Structured Output - No custom JSON parsing needed
+      const PersonaDataSchema = z.object({
+        name: z.string().min(1).describe('Full name of the interviewer'),
+        role: z.string().min(1).describe('Job title and company'),
+        tenure_years: z.number().int().min(1).max(15).describe('Years at company'),
+        personality_traits: z.array(z.string()).min(2).max(5).describe('Key personality traits'),
+        strategic_advantages_they_know: z.array(z.string()).max(3).describe('Strategic advantages'),
+        recent_developments_they_lived_through: z.array(z.string()).max(3).describe('Recent developments'),
+        competitive_context_understanding: z.string().min(1).describe('Competitive landscape understanding')
+      });
+
+      const personaData = await config.llmProvider?.generateStructured(
+        PersonaDataSchema,
         'persona_generation',
-        personaPrompt,
-        { format: 'json' }
+        personaPrompt
       );
 
-      if (!personaResponse) {
-        throw new Error('No response from LLM provider');
+      if (!personaData) {
+        throw new Error('No response from structured output generation');
       }
-
-      const personaData = JSON.parse(personaResponse.content);
 
       const persona: InterviewerPersona = {
         id: `${roundType}-${i + 1}`,
@@ -206,7 +359,13 @@ export async function generateStandardQuestions(
   const standardQuestionSets: Record<NonTechnicalRoundType, StandardQuestion[]> = {} as any;
 
   for (const persona of state.generatedPersonas) {
+    // Build personalization context for adaptive question generation
+    const personalizationContext = buildPersonalizationContext(state.userProfile, persona.round_type);
+    const adaptationStrategy = getAdaptationStrategy(state.userProfile, persona.round_type);
+
     const questionsPrompt = `Generate 6 standard interview questions for a ${persona.round_type.replace('_', ' ')} interview round.
+
+${personalizationContext}${adaptationStrategy}
 
 INTERVIEWER CONTEXT:
 - Name: ${persona.identity.name}
@@ -221,9 +380,10 @@ COMPANY KNOWLEDGE:
 
 Generate questions that:
 1. Are standard questions any interviewer at any company might ask
-2. Can be answered well by candidates who understand the competitive context
-3. Have natural follow-up questions
-4. Are appropriate for a ${persona.round_type.replace('_', ' ')} round
+2. ${state.userProfile ? 'Address the candidate\'s specific practice areas and background constructively' : 'Are universally applicable'}
+3. Can be answered well by candidates who understand the competitive context
+4. Have natural follow-up questions that ${state.userProfile ? 'create opportunities to showcase transferable skills' : 'explore depth'}
+5. Are appropriate for a ${persona.round_type.replace('_', ' ')} round
 
 Return ONLY a JSON array with this structure:
 [
@@ -236,20 +396,25 @@ Return ONLY a JSON array with this structure:
 ]`;
 
     try {
-      const llmProvider = config.llmProvider;
-      const questionsResponse = await llmProvider?.generateContent(
+      // OOTB Structured Output for Questions
+      const QuestionsArraySchema = z.array(z.object({
+        text: z.string().min(10).describe('The interview question text'),
+        category: z.enum(['motivation', 'behavioral', 'cultural', 'strategic']).describe('Question category'),
+        follow_ups: z.array(z.string()).max(3).describe('Follow-up questions'),
+        time_allocation_minutes: z.number().int().min(2).max(10).describe('Recommended time allocation')
+      })).min(4).max(8).describe('Array of interview questions');
+
+      const questionsArray = await config.llmProvider?.generateStructured(
+        QuestionsArraySchema,
         'question_generation',
-        questionsPrompt,
-        { format: 'json' }
+        questionsPrompt
       );
 
-      if (!questionsResponse) {
-        throw new Error('No response from LLM provider for questions');
+      if (!questionsArray || questionsArray.length === 0) {
+        throw new Error('No questions generated from structured output');
       }
 
-      const questionsData = JSON.parse(questionsResponse.content);
-
-      const questions: StandardQuestion[] = questionsData.map((q: any, index: number) => ({
+      const questions: StandardQuestion[] = questionsArray.map((q: any, index: number) => ({
         id: `${persona.round_type}-q${index + 1}`,
         text: q.text,
         category: q.category as StandardQuestion['category'],
@@ -378,6 +543,86 @@ Return ONLY a JSON object:
     progress: 80
   };
 }
+
+// Helper function to extract user context (backwards compatible)
+function getUserContext(state: CurriculumState): {
+  hasProfile: boolean;
+  contextText: string;
+  adaptationStyle: string;
+} {
+  if (!state.userProfile) {
+    return { hasProfile: false, contextText: '', adaptationStyle: 'professional and balanced' };
+  }
+
+  // NEW FORMAT: Prefer human-centered fields
+  if (state.userProfile.excitement || state.userProfile.concerns) {
+    let contextText = '';
+
+    if (state.userProfile.excitement) {
+      contextText += `- EXCITEMENT: ${state.userProfile.excitement}\n`;
+    }
+    if (state.userProfile.concerns) {
+      contextText += `- CONCERNS: ${state.userProfile.concerns}\n`;
+    }
+    if (state.userProfile.weakAreas?.length) {
+      contextText += `- WEAK AREAS: ${state.userProfile.weakAreas.join(', ')}\n`;
+    }
+    if (state.userProfile.backgroundContext) {
+      contextText += `- BACKGROUND: ${state.userProfile.backgroundContext}\n`;
+    }
+    if (state.userProfile.preparationGoals) {
+      contextText += `- GOALS: ${state.userProfile.preparationGoals}\n`;
+    }
+
+    // AI-powered adaptation style
+    const adaptationStyle = getAdaptiveStyle(state.userProfile.concerns || '', state.userProfile.excitement || '');
+
+    return { hasProfile: true, contextText, adaptationStyle };
+  }
+
+  // Legacy format support (simplified)
+  if (state.userProfile.focusArea || state.userProfile.concern) {
+    const contextText = `- Focus Area: ${state.userProfile.focusArea?.replace('_', ' ') || 'general'} - candidate wants to practice this
+- Main Concern: ${state.userProfile.concern?.replace('_', ' ') || 'general preparation'} - candidate is worried about this
+${state.userProfile.background ? `- Background: ${state.userProfile.background}` : ''}`;
+
+    return { hasProfile: true, contextText, adaptationStyle: 'professional and supportive' };
+  }
+
+  return { hasProfile: false, contextText: '', adaptationStyle: 'professional and balanced' };
+}
+
+// AI-powered adaptation for human-centered input
+function getAdaptiveStyle(concerns: string, excitement: string): string {
+  // Simple keyword matching for now - could be enhanced with LLM
+  const lowercaseConcerns = concerns.toLowerCase();
+  const lowercaseExcitement = excitement.toLowerCase();
+
+  let style = 'professional and ';
+
+  // Adapt based on concerns
+  if (lowercaseConcerns.includes('nervous') || lowercaseConcerns.includes('worried') || lowercaseConcerns.includes('anxious')) {
+    style += 'reassuring, ';
+  }
+  if (lowercaseConcerns.includes('inexperience') || lowercaseConcerns.includes('new to') || lowercaseConcerns.includes('junior')) {
+    style += 'educational, ';
+  }
+  if (lowercaseConcerns.includes('culture') || lowercaseConcerns.includes('fit')) {
+    style += 'welcoming, ';
+  }
+
+  // Adapt based on excitement
+  if (lowercaseExcitement.includes('technology') || lowercaseExcitement.includes('innovation')) {
+    style += 'technically curious, ';
+  }
+  if (lowercaseExcitement.includes('growth') || lowercaseExcitement.includes('opportunity')) {
+    style += 'development-focused, ';
+  }
+
+  return style + 'conversational';
+}
+
+// Legacy helper function removed - using enhanced version above
 
 // Fallback helper functions
 function getFallbackPersonaName(roundType: NonTechnicalRoundType): string {

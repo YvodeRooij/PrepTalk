@@ -25,6 +25,21 @@ export const CurriculumStateAnnotation = Annotation.Root({
   inputType: Annotation<'url' | 'description' | 'company_role'>({
     default: () => 'url',
   }),
+  userProfile: Annotation<{
+    // NEW: Human-centered fields (preferred)
+    excitement?: string;
+    concerns?: string;
+    weakAreas?: string[];
+    backgroundContext?: string;
+    preparationGoals?: string;
+
+    // LEGACY: Keep existing for backwards compatibility
+    focusArea?: 'career_transition' | 'leadership_stories' | 'technical_bridge' | 'industry_switch';
+    concern?: 'industry_knowledge' | 'leadership_experience' | 'culture_fit' | 'role_complexity';
+    background?: string;
+  } | null>({
+    default: () => null,
+  }),
 
   // Discovery Phase
   discoveredSources: Annotation<Array<{

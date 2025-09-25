@@ -112,14 +112,14 @@ export class CurriculumAgent {
   private buildGraph() {
     const workflow = new StateGraph(CurriculumStateAnnotation)
       // Discovery Phase
-      .addNode("discover_sources", discoverSources)
-      .addNode("fetch_sources", fetchSourceData)
-      .addNode("validate_sources", validateSources)
-      .addNode("merge_research", mergeResearch)
+      .addNode("discover_sources", (state) => this.wrapWithProvider(discoverSources)(state))
+      .addNode("fetch_sources", (state) => this.wrapWithProvider(fetchSourceData)(state))
+      .addNode("validate_sources", (state) => this.wrapWithProvider(validateSources)(state), { ends: ["merge_research", "fallback_research"] })
+      .addNode("merge_research", (state) => this.wrapWithProvider(mergeResearch)(state))
 
       // Research Phase
-      .addNode("parse_job", parseJob)
-      .addNode("analyze_role", analyzeRole)
+      .addNode("parse_job", (state) => this.wrapWithProvider(parseJob)(state))
+      .addNode("analyze_role", (state) => this.wrapWithProvider(analyzeRole)(state))
 
       // NEW: Non-Technical Persona Generation Phase
       .addNode("generate_personas", (state) => this.wrapWithProvider(generateDynamicPersonas)(state))
@@ -127,10 +127,10 @@ export class CurriculumAgent {
       .addNode("generate_prep_guides", (state) => this.wrapWithProvider(generateCandidatePrep)(state))
 
       // Generation Phase
-      .addNode("design_structure", designStructure)
-      .addNode("generate_rounds", generateRounds)
-      .addNode("evaluate_quality", evaluateQualityWithRouting)
-      .addNode("refine_rounds", refineRounds)
+      .addNode("design_structure", (state) => this.wrapWithProvider(designStructure)(state))
+      .addNode("generate_rounds", (state) => this.wrapWithProvider(generateRounds)(state))
+      .addNode("evaluate_quality", (state) => this.wrapWithProvider(evaluateQualityWithRouting)(state), { ends: ["save_curriculum", "refine_rounds"] })
+      .addNode("refine_rounds", (state) => this.wrapWithProvider(refineRounds)(state))
 
       // Persistence Phase
       .addNode("save_curriculum", (state) => saveCurriculum(state, { supabase: this.supabase }))
@@ -175,12 +175,15 @@ export class CurriculumAgent {
 
   // Fallback node for when source validation fails
   private async fallbackResearch(state: CurriculumState): Promise<Partial<CurriculumState>> {
-    // Create minimal company context from whatever data we have
+    // Extract basic info from user input
+    const isUrl = state.userInput.includes('http');
+    const companyName = isUrl ? 'Unknown Company' : state.userInput.split(' ')[0];
+    const roleTitle = isUrl ? 'Unknown Role' : state.userInput;
+
+    // Create minimal required state for persona generation
     return {
       companyContext: {
-        name: state.userInput.includes('http')
-          ? 'Unknown Company'
-          : state.userInput.split(' ')[0],
+        name: companyName,
         values: [],
         recent_news: [],
         interview_process: {
@@ -191,12 +194,43 @@ export class CurriculumAgent {
         },
         confidence_score: 0.3,
       },
+      jobData: {
+        title: roleTitle,
+        level: 'mid',
+        department: 'General',
+        location: 'Remote',
+        description: `${roleTitle} position with standard responsibilities and requirements.`,
+        requirements: ['Relevant experience', 'Strong communication skills', 'Team collaboration'],
+        responsibilities: ['Execute on key projects', 'Collaborate with team members', 'Contribute to company goals'],
+        confidence_score: 0.3,
+      },
+      competitiveIntelligence: {
+        primaryCompetitors: ['Industry leaders'],
+        roleComparison: 'Standard industry position with typical expectations',
+        strategicAdvantages: ['Company culture', 'Growth opportunities'],
+        recentDevelopments: ['Continued market presence'],
+        competitivePositioning: 'Established market player with growth focus',
+      },
       warnings: [...(state.warnings || []), 'Using fallback research with limited data'],
     };
   }
 
   // Main execution method
-  async generate(userInput: string): Promise<string> {
+  async generate(
+    userInput: string,
+    userProfile?: {
+      // Rich text fields from form
+      excitement?: string;
+      concerns?: string;
+      weakAreas?: string[];
+      backgroundContext?: string;
+      preparationGoals?: string;
+      // Legacy support for old format
+      focusArea?: string;
+      concern?: string;
+      background?: string;
+    } | null
+  ): Promise<string> {
     // Ensure initialization is complete before running
     if (this.initializationPromise) {
       await this.initializationPromise;
@@ -205,6 +239,7 @@ export class CurriculumAgent {
 
     const initialState: Partial<CurriculumState> = {
       userInput,
+      userProfile: userProfile || null,
       startTime: Date.now(),
       discoveredSources: [],
       errors: [],

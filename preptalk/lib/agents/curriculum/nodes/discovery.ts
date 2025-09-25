@@ -1,7 +1,6 @@
 // Discovery and Validation Nodes for LangGraph
 // Pure functions that operate on state, no classes
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Command } from '@langchain/langgraph';
 import { CurriculumState } from '../state';
 
@@ -13,19 +12,7 @@ type DynamicSourceLLMResponse = {
   trustScore: number;
 };
 
-// Initialize lazily to ensure env vars are loaded
-let genAI: GoogleGenerativeAI | null = null;
-
-function getGenAI(): GoogleGenerativeAI {
-  if (!genAI) {
-    const apiKey = process.env.GOOGLE_AI_API_KEY;
-    if (!apiKey) {
-      throw new Error('GOOGLE_AI_API_KEY is not set in environment variables');
-    }
-    genAI = new GoogleGenerativeAI(apiKey);
-  }
-  return genAI;
-}
+// No longer using direct Gemini instantiation - using LLM provider service
 
 // Configuration constants
 const MAX_DYNAMIC_SOURCES = 5;
@@ -36,7 +23,10 @@ const MIN_CONFIDENCE = 0.6;
  * Node: Classify user input and discover sources
  * Determines if input is URL or text, finds relevant sources
  */
-export async function discoverSources(state: CurriculumState): Promise<Partial<CurriculumState>> {
+export async function discoverSources(
+  state: CurriculumState,
+  config?: { llmProvider?: any }
+): Promise<Partial<CurriculumState>> {
   console.log('🔍 Discovering sources for:', state.userInput);
 
   // Classify input type
@@ -56,7 +46,7 @@ export async function discoverSources(state: CurriculumState): Promise<Partial<C
   }
 
   // Extract entities from text description
-  const entities = await extractEntities(state.userInput);
+  const entities = await extractEntities(state.userInput, config?.llmProvider);
 
   if (!entities.company) {
     return {
@@ -72,7 +62,8 @@ export async function discoverSources(state: CurriculumState): Promise<Partial<C
   const dynamicSources = await discoverDynamicSources(
     entities.company,
     entities.role || '',
-    MAX_DYNAMIC_SOURCES
+    MAX_DYNAMIC_SOURCES,
+    config?.llmProvider
   );
 
   return {
@@ -83,16 +74,15 @@ export async function discoverSources(state: CurriculumState): Promise<Partial<C
 
 /**
  * Node: Fetch data from discovered sources
- * Uses Gemini URL context to fetch all sources in parallel
+ * Uses LLM provider to fetch all sources in parallel
  */
-export async function fetchSourceData(state: CurriculumState): Promise<Partial<CurriculumState>> {
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.4,
-    }
-  });
+export async function fetchSourceData(
+  state: CurriculumState,
+  config?: { llmProvider?: any }
+): Promise<Partial<CurriculumState>> {
+  if (!config?.llmProvider) {
+    throw new Error('LLM provider is required for fetchSourceData');
+  }
 
   // Separate core and dynamic
   const coreSources = state.discoveredSources.filter(s => s.priority === 'core');
@@ -106,9 +96,9 @@ export async function fetchSourceData(state: CurriculumState): Promise<Partial<C
   // Parallel fetch using Promise.allSettled
   const fetchPromises: Promise<SourceWithData>[] = sourcesToFetch.map(async (source) => {
     try {
-      const result = await model.generateContent([
-        {
-          text: `Extract job and company information from this ${source.sourceType} page.
+      const result = await config.llmProvider.generateContent(
+        'company_research',
+        `Extract job and company information from this ${source.sourceType} page: ${source.url}
 
           Focus on:
           - Company culture and values
@@ -117,18 +107,12 @@ export async function fetchSourceData(state: CurriculumState): Promise<Partial<C
           - Required skills
           - Work environment
 
-          Return as JSON.`
-        },
-        {
-          fileData: {
-            mimeType: 'text/html',
-            fileUri: source.url,
-          },
-        },
-      ]);
+          Return as JSON.`,
+        { format: 'json' }
+      );
 
-  const data = JSON.parse(result.response.text());
-  return { ...source, data };
+      const data = JSON.parse(result.content);
+      return { ...source, data };
 
     } catch (error) {
       console.warn(`Failed to fetch ${source.url}`);
@@ -152,35 +136,39 @@ export async function fetchSourceData(state: CurriculumState): Promise<Partial<C
  * Node: Validate fetched data using LLM judge
  * Determines if each source has useful data
  */
-export async function validateSources(state: CurriculumState): Promise<Command> {
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.3,
-    }
-  });
+export async function validateSources(
+  state: CurriculumState,
+  config: { llmProvider?: any }
+): Promise<Command> {
+  if (!config.llmProvider) {
+    throw new Error('LLM provider is required for validateSources');
+  }
 
-  // Validate each source with data
+  // Validate each source with data using the provider service
   const validationPromises = state.discoveredSources
     .filter(s => s.data !== null)
     .map(async (source) => {
-      const result = await model.generateContent([
-        {
-          text: `Judge if this data is useful for interview preparation:
+      const result = await config.llmProvider.generateContent(
+        'job_parsing', // Use job_parsing task for validation
+        `Judge if this data is useful for interview preparation:
 
-          Source: ${source.sourceType} (${source.url})
-          Data: ${JSON.stringify(source.data)}
+        Source: ${source.sourceType} (${source.url})
+        Data: ${JSON.stringify(source.data)}
 
-          Return JSON:
-          - isUseful: boolean
-          - confidence: 0-1
-          - recommendation: "use" | "supplement" | "discard"`
-        }
-      ]);
+        Return JSON:
+        - isUseful: boolean
+        - confidence: 0-1
+        - recommendation: "use" | "supplement" | "discard"`,
+        { format: 'json' }
+      );
 
-      const validation = JSON.parse(result.response.text());
-      return { ...source, validation };
+      try {
+        const validation = JSON.parse(result.content);
+        return { ...source, validation };
+      } catch (error) {
+        console.warn('Failed to parse LLM validation response:', error);
+        return { ...source, validation: { isUseful: false, confidence: 0 } };
+      }
     });
 
   const validatedSources = await Promise.all(validationPromises);
@@ -212,23 +200,22 @@ export async function validateSources(state: CurriculumState): Promise<Command> 
  * Node: Merge validated sources into company context
  * Cross-validates and builds consensus
  */
-export async function mergeResearch(state: CurriculumState): Promise<Partial<CurriculumState>> {
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.2,
-    }
-  });
+export async function mergeResearch(
+  state: CurriculumState,
+  config?: { llmProvider?: any }
+): Promise<Partial<CurriculumState>> {
+  if (!config?.llmProvider) {
+    throw new Error('LLM provider is required for mergeResearch');
+  }
 
   // Get only useful sources
   const usefulSources = state.discoveredSources.filter(
     s => s.validation?.isUseful && s.data
   );
 
-  const result = await model.generateContent([
-    {
-      text: `Merge and cross-validate this company research from multiple sources:
+  const result = await config.llmProvider.generateContent(
+    'company_research',
+    `Merge and cross-validate this company research from multiple sources:
 
       ${usefulSources.map(s => `
         ${s.sourceType} (confidence: ${s.validation?.confidence}):
@@ -239,11 +226,11 @@ export async function mergeResearch(state: CurriculumState): Promise<Partial<Cur
       - name: company name
       - values: array of values/culture
       - interview_process: { typical_rounds, difficulty, style }
-      - confidence_score: overall confidence 0-1`
-    }
-  ]);
+      - confidence_score: overall confidence 0-1`,
+    { format: 'json' }
+  );
 
-  const companyContext = JSON.parse(result.response.text());
+  const companyContext = JSON.parse(result.content);
 
   return {
     companyContext: {
@@ -255,27 +242,23 @@ export async function mergeResearch(state: CurriculumState): Promise<Partial<Cur
 
 // Helper functions (pure, no state)
 
-async function extractEntities(text: string) {
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.3,
-    }
-  });
+async function extractEntities(text: string, llmProvider?: any) {
+  if (!llmProvider) {
+    throw new Error('LLM provider is required for extractEntities');
+  }
 
-  const result = await model.generateContent([
-    {
-      text: `Extract company and role from: "${text}"
+  const result = await llmProvider.generateContent(
+    'job_parsing',
+    `Extract company and role from: "${text}"
 
       Return JSON:
       - company: company name or null
       - role: job title or null
-      - confidence: 0-1`
-    }
-  ]);
+      - confidence: 0-1`,
+    { format: 'json' }
+  );
 
-  return JSON.parse(result.response.text());
+  return JSON.parse(result.content);
 }
 
 function buildCoreSourceURLs(company: string, role?: string) {
@@ -303,29 +286,25 @@ function buildCoreSourceURLs(company: string, role?: string) {
   ];
 }
 
-async function discoverDynamicSources(company: string, role: string, limit: number) {
-  const model = getGenAI().getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    generationConfig: {
-      responseMimeType: 'application/json',
-      temperature: 0.4,
-    }
-  });
+async function discoverDynamicSources(company: string, role: string, limit: number, llmProvider?: any) {
+  if (!llmProvider) {
+    throw new Error('LLM provider is required for discoverDynamicSources');
+  }
 
-  const result = await model.generateContent([
-    {
-      text: `Find ${limit} job board URLs for ${company} ${role}.
+  const result = await llmProvider.generateContent(
+    'company_research',
+    `Find ${limit} job board URLs for ${company} ${role}.
 
       Return JSON array:
       [{
         url: "actual URL",
         sourceType: "aggregator" or "other",
         trustScore: 0-1
-      }]`
-    }
-  ]);
+      }]`,
+    { format: 'json' }
+  );
 
-  const sources = JSON.parse(result.response.text()) as DynamicSourceLLMResponse[];
+  const sources = JSON.parse(result.content) as DynamicSourceLLMResponse[];
   return sources.map((source) => ({
     ...source,
     priority: 'dynamic' as const,

@@ -54,6 +54,32 @@ export default function LoginPage() {
     }
   };
 
+  // Development test login
+  const handleTestLogin = async () => {
+    if (process.env.NODE_ENV !== 'development') return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: 'yvoderooij@test.com',
+        password: 'test123456',
+      });
+
+      if (error) {
+        setError(error.message);
+      } else {
+        router.push('/dashboard');
+        router.refresh();
+      }
+    } catch (error) {
+      setError('Failed to sign in with test account');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
@@ -142,6 +168,20 @@ export default function LoginPage() {
               Continue with Google
             </button>
           </div>
+
+          {/* Development test login button */}
+          {process.env.NODE_ENV === 'development' && (
+            <div>
+              <button
+                type="button"
+                onClick={handleTestLogin}
+                disabled={loading}
+                className="group relative w-full flex justify-center py-2 px-4 border border-orange-300 text-sm font-medium rounded-md text-orange-700 bg-orange-50 hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                🧪 Test Login (Dev Only)
+              </button>
+            </div>
+          )}
 
           <div className="text-center">
             <span className="text-sm text-gray-600">
