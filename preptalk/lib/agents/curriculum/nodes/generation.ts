@@ -4,16 +4,44 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Command } from '@langchain/langgraph';
 import { CurriculumState } from '../state';
-import { CurriculumStructure, GeneratedRound } from '../types';
+import { CurriculumStructure, GeneratedRound, Question, RoundDefinition, RoundTopic } from '../types';
 
-// Initialize once at module level
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY!);
+type StructureResponse = Pick<CurriculumStructure, 'total_rounds' | 'difficulty_level' | 'rounds'> & {
+  rounds: RoundDefinition[];
+};
+
+type GeneratedTopic = RoundTopic & {
+  questions?: Question[];
+};
+
+type RoundContentResponse = {
+  interviewer_persona: GeneratedRound['interviewer_persona'];
+  topics?: GeneratedTopic[];
+  evaluation_criteria?: GeneratedRound['evaluation_criteria'];
+  sample_questions?: Question[];
+  opening_script?: string;
+  closing_script?: string;
+};
+
+// Initialize lazily to ensure env vars are loaded
+let genAI: GoogleGenerativeAI | null = null;
+
+function getGenAI(): GoogleGenerativeAI {
+  if (!genAI) {
+    const apiKey = process.env.GOOGLE_AI_API_KEY;
+    if (!apiKey) {
+      throw new Error('GOOGLE_AI_API_KEY is not set in environment variables');
+    }
+    genAI = new GoogleGenerativeAI(apiKey);
+  }
+  return genAI;
+}
 
 /**
  * Node: Design curriculum structure based on research
  */
 export async function designStructure(state: CurriculumState): Promise<Partial<CurriculumState>> {
-  const model = genAI.getGenerativeModel({
+  const model = getGenAI().getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
       responseMimeType: 'application/json',
@@ -47,15 +75,15 @@ export async function designStructure(state: CurriculumState): Promise<Partial<C
     }
   ]);
 
-  const structure = JSON.parse(result.response.text());
+  const structure = JSON.parse(result.response.text()) as StructureResponse;
+  const rounds = structure.rounds ?? [];
+  const estimatedTotalMinutes = rounds.reduce((sum, round) => sum + (round.duration_minutes ?? 0), 0);
 
   return {
     structure: {
       job_id: state.jobData.id || '',
       ...structure,
-      estimated_total_minutes: structure.rounds.reduce(
-        (sum: number, r: any) => sum + r.duration_minutes, 0
-      ),
+      estimated_total_minutes: estimatedTotalMinutes,
       generation_strategy: 'comprehensive',
       refinement_iterations: state.refinementAttempts || 0,
     } as CurriculumStructure,
@@ -66,7 +94,7 @@ export async function designStructure(state: CurriculumState): Promise<Partial<C
  * Node: Generate detailed content for each round
  */
 export async function generateRounds(state: CurriculumState): Promise<Partial<CurriculumState>> {
-  const model = genAI.getGenerativeModel({
+  const model = getGenAI().getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
       responseMimeType: 'application/json',
@@ -101,7 +129,20 @@ export async function generateRounds(state: CurriculumState): Promise<Partial<Cu
       }
     ]);
 
-    const content = JSON.parse(result.response.text());
+    const content = JSON.parse(result.response.text()) as RoundContentResponse;
+    const rawTopics = content.topics ?? [];
+    const topicsToCover: RoundTopic[] = rawTopics.map((topic) => ({
+      topic: topic.topic,
+      subtopics: topic.subtopics ?? [],
+      depth: topic.depth ?? 'intermediate',
+      time_allocation: topic.time_allocation ?? Math.round(roundDef.duration_minutes / Math.max(rawTopics.length, 1)),
+      must_cover: topic.must_cover ?? true,
+      question_count: topic.question_count ?? topic.questions?.length ?? 0,
+      difficulty_progression: topic.difficulty_progression ?? 'mixed',
+    }));
+
+    const sampleQuestions: Question[] = content.sample_questions
+      ?? rawTopics.flatMap((topic) => topic.questions ?? []);
 
     rounds.push({
       round_number: roundDef.round_number,
@@ -110,9 +151,9 @@ export async function generateRounds(state: CurriculumState): Promise<Partial<Cu
       description: `${roundDef.type} interview focusing on ${roundDef.focus_areas.join(', ')}`,
       duration_minutes: roundDef.duration_minutes,
       interviewer_persona: content.interviewer_persona,
-      topics_to_cover: content.topics || [],
+      topics_to_cover: topicsToCover,
       evaluation_criteria: content.evaluation_criteria || [],
-      sample_questions: content.topics?.flatMap((t: any) => t.questions) || [],
+      sample_questions: sampleQuestions,
       opening_script: content.opening_script || 'Welcome to the interview...',
       closing_script: content.closing_script || 'Thank you for your time...',
       passing_score: 70,
@@ -126,7 +167,7 @@ export async function generateRounds(state: CurriculumState): Promise<Partial<Cu
  * Node: Evaluate quality and route with Command (v1.0 pattern)
  */
 export async function evaluateQualityWithRouting(state: CurriculumState): Promise<Command> {
-  const model = genAI.getGenerativeModel({
+  const model = getGenAI().getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
       responseMimeType: 'application/json',

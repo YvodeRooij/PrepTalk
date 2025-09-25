@@ -2,7 +2,7 @@
 // Run with: npx tsx lib/agents/curriculum/test.ts
 
 import 'dotenv/config';
-import { createCurriculumAgent } from './index';
+import { createCurriculumAgent } from '../index';
 
 async function testCurriculumAgent() {
   console.log('🚀 Testing Curriculum Agent with LangGraph v1.0...\n');
@@ -22,11 +22,16 @@ async function testCurriculumAgent() {
   }
 
   try {
-    // Create the agent
+    // Create the agent with options
     const agent = createCurriculumAgent(
       process.env.SUPABASE_URL!,
       process.env.SUPABASE_ANON_KEY!,
-      process.env.GOOGLE_AI_API_KEY!
+      process.env.GOOGLE_AI_API_KEY!,
+      {
+        // Options for schema validation:
+        // skipSchemaValidation: true,     // Skip validation entirely (for quick tests)
+        // forceSchemaValidation: true,    // Bypass cache (for testing schema changes)
+      }
     );
 
     // Test with a real job URL

@@ -5,8 +5,27 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Command } from '@langchain/langgraph';
 import { CurriculumState } from '../state';
 
-// Initialize Gemini once at module level (not in class)
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY!);
+type DiscoveredSource = CurriculumState['discoveredSources'][number];
+type SourceWithData = DiscoveredSource & { data: unknown };
+type DynamicSourceLLMResponse = {
+  url: string;
+  sourceType: DiscoveredSource['sourceType'];
+  trustScore: number;
+};
+
+// Initialize lazily to ensure env vars are loaded
+let genAI: GoogleGenerativeAI | null = null;
+
+function getGenAI(): GoogleGenerativeAI {
+  if (!genAI) {
+    const apiKey = process.env.GOOGLE_AI_API_KEY;
+    if (!apiKey) {
+      throw new Error('GOOGLE_AI_API_KEY is not set in environment variables');
+    }
+    genAI = new GoogleGenerativeAI(apiKey);
+  }
+  return genAI;
+}
 
 // Configuration constants
 const MAX_DYNAMIC_SOURCES = 5;
@@ -67,7 +86,7 @@ export async function discoverSources(state: CurriculumState): Promise<Partial<C
  * Uses Gemini URL context to fetch all sources in parallel
  */
 export async function fetchSourceData(state: CurriculumState): Promise<Partial<CurriculumState>> {
-  const model = genAI.getGenerativeModel({
+  const model = getGenAI().getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
       responseMimeType: 'application/json',
@@ -85,7 +104,7 @@ export async function fetchSourceData(state: CurriculumState): Promise<Partial<C
   console.log(`📥 Fetching ${sourcesToFetch.length} sources...`);
 
   // Parallel fetch using Promise.allSettled
-  const fetchPromises = sourcesToFetch.map(async (source) => {
+  const fetchPromises: Promise<SourceWithData>[] = sourcesToFetch.map(async (source) => {
     try {
       const result = await model.generateContent([
         {
@@ -108,8 +127,8 @@ export async function fetchSourceData(state: CurriculumState): Promise<Partial<C
         },
       ]);
 
-      const data = JSON.parse(result.response.text());
-      return { ...source, data };
+  const data = JSON.parse(result.response.text());
+  return { ...source, data };
 
     } catch (error) {
       console.warn(`Failed to fetch ${source.url}`);
@@ -121,8 +140,8 @@ export async function fetchSourceData(state: CurriculumState): Promise<Partial<C
 
   // Update sources with fetched data
   const updatedSources = results
-    .filter(r => r.status === 'fulfilled')
-    .map(r => (r as PromiseFulfilledResult<any>).value);
+    .filter((result): result is PromiseFulfilledResult<SourceWithData> => result.status === 'fulfilled')
+    .map(result => result.value);
 
   return {
     discoveredSources: updatedSources,
@@ -134,7 +153,7 @@ export async function fetchSourceData(state: CurriculumState): Promise<Partial<C
  * Determines if each source has useful data
  */
 export async function validateSources(state: CurriculumState): Promise<Command> {
-  const model = genAI.getGenerativeModel({
+  const model = getGenAI().getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
       responseMimeType: 'application/json',
@@ -194,7 +213,7 @@ export async function validateSources(state: CurriculumState): Promise<Command> 
  * Cross-validates and builds consensus
  */
 export async function mergeResearch(state: CurriculumState): Promise<Partial<CurriculumState>> {
-  const model = genAI.getGenerativeModel({
+  const model = getGenAI().getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
       responseMimeType: 'application/json',
@@ -237,7 +256,7 @@ export async function mergeResearch(state: CurriculumState): Promise<Partial<Cur
 // Helper functions (pure, no state)
 
 async function extractEntities(text: string) {
-  const model = genAI.getGenerativeModel({
+  const model = getGenAI().getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
       responseMimeType: 'application/json',
@@ -285,7 +304,7 @@ function buildCoreSourceURLs(company: string, role?: string) {
 }
 
 async function discoverDynamicSources(company: string, role: string, limit: number) {
-  const model = genAI.getGenerativeModel({
+  const model = getGenAI().getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
       responseMimeType: 'application/json',
@@ -306,6 +325,9 @@ async function discoverDynamicSources(company: string, role: string, limit: numb
     }
   ]);
 
-  const sources = JSON.parse(result.response.text());
-  return sources.map((s: any) => ({ ...s, priority: 'dynamic' }));
+  const sources = JSON.parse(result.response.text()) as DynamicSourceLLMResponse[];
+  return sources.map((source) => ({
+    ...source,
+    priority: 'dynamic' as const,
+  }));
 }

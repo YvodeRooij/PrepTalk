@@ -4,6 +4,7 @@
 import { StateGraph } from '@langchain/langgraph';
 import { createClient } from '@supabase/supabase-js';
 import { CurriculumStateAnnotation, CurriculumState } from './state';
+import { validateSchemaBeforeExecution } from './schema-validator';
 
 // Import all pure function nodes
 import {
@@ -26,16 +27,69 @@ import {
   saveCurriculum
 } from './nodes/persistence';
 
+// Cache validation results to avoid checking every time
+let schemaValidationCache: { validated: boolean; timestamp: number } | null = null;
+const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+
+export interface CurriculumAgentOptions {
+  skipSchemaValidation?: boolean;
+  forceSchemaValidation?: boolean; // Bypass cache
+}
+
 export class CurriculumAgent {
   private graph: ReturnType<typeof StateGraph.prototype.compile>;
+  private initializationPromise: Promise<void> | null = null;
 
   constructor(
     private supabase: ReturnType<typeof createClient>,
-    apiKey: string
+    apiKey: string,
+    private options: CurriculumAgentOptions = {}
   ) {
     // Set API key for node functions to use
     process.env.GOOGLE_AI_API_KEY = apiKey;
+
+    // Initialize asynchronously
+    this.initializationPromise = this.initialize();
     this.graph = this.buildGraph();
+  }
+
+  private async initialize(): Promise<void> {
+    // Skip validation if explicitly disabled
+    if (this.options.skipSchemaValidation) {
+      console.log('⚡ Schema validation skipped (skipSchemaValidation=true)');
+      return;
+    }
+
+    // Check cache unless forced
+    if (!this.options.forceSchemaValidation && schemaValidationCache) {
+      const age = Date.now() - schemaValidationCache.timestamp;
+      if (age < CACHE_DURATION_MS) {
+        console.log('✅ Using cached schema validation (valid for', Math.round((CACHE_DURATION_MS - age) / 1000), 'more seconds)');
+        return;
+      }
+    }
+
+    try {
+      // Run validation
+      console.log('🔍 Validating database schema...');
+      await validateSchemaBeforeExecution(this.supabase);
+
+      // Cache successful validation
+      schemaValidationCache = {
+        validated: true,
+        timestamp: Date.now()
+      };
+    } catch (error) {
+      // In development, warn but continue
+      if (process.env.NODE_ENV === 'development') {
+        console.error('⚠️  Schema validation failed in development mode:');
+        console.error(error);
+        console.error('⚠️  Continuing anyway - fix schema issues before production!');
+      } else {
+        // In production, fail fast
+        throw error;
+      }
+    }
   }
 
   private buildGraph() {
@@ -104,6 +158,12 @@ export class CurriculumAgent {
 
   // Main execution method
   async generate(userInput: string): Promise<string> {
+    // Ensure initialization is complete before running
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      this.initializationPromise = null; // Clear after first run
+    }
+
     const initialState: Partial<CurriculumState> = {
       userInput,
       startTime: Date.now(),

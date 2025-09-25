@@ -62,7 +62,7 @@ export default function SignupPage() {
               Check your email
             </h2>
             <p className="mt-2 text-sm text-gray-600">
-              We've sent a verification link to <strong>{email}</strong>
+              We&apos;ve sent a verification link to <strong>{email}</strong>
             </p>
             <p className="mt-4 text-sm text-gray-500">
               Please check your email and click the verification link to activate your account.
