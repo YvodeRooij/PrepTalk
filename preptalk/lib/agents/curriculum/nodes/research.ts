@@ -19,15 +19,35 @@ function formatUrlsForPrompt(urls: string[]): string {
 }
 
 function safeParseJson<T>(raw: string, context: string): T {
-  const text = raw
-    .trim()
-    .replace(/^```json\s*/i, '')
-    .replace(/```$/i, '')
-    .trim();
+  let text = raw.trim();
+
+  // Remove markdown code blocks
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim();
+
+  // Try to find the first complete JSON object
+  let startIndex = text.indexOf('{');
+  if (startIndex !== -1) {
+    let braceCount = 0;
+    let endIndex = startIndex;
+
+    for (let i = startIndex; i < text.length; i++) {
+      if (text[i] === '{') braceCount++;
+      if (text[i] === '}') braceCount--;
+      if (braceCount === 0) {
+        endIndex = i;
+        break;
+      }
+    }
+
+    if (braceCount === 0) {
+      text = text.substring(startIndex, endIndex + 1);
+    }
+  }
 
   try {
     return JSON.parse(text) as T;
   } catch (error) {
+    console.warn(`Raw response for ${context}:`, raw.substring(0, 300) + '...');
     throw new Error(`Failed to parse JSON for ${context}: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
@@ -140,86 +160,134 @@ Return ONLY a valid JSON object (no markdown, no explanation) with these exact f
 }
 
 /**
- * Node: Analyze role patterns based on job and company data
+ * Node: Enhanced role analysis with Google Search + URL Context
  */
 export async function analyzeRole(state: CurriculumState): Promise<Partial<CurriculumState>> {
   const model = getGenAI().getGenerativeModel({
     model: 'gemini-2.5-flash',
     generationConfig: {
-      // Don't use JSON mode when using URL context
       temperature: 0.5,
     }
   });
 
-  if (!state.jobData || !state.companyContext) {
+  if (!state.jobData) {
     return {
-      errors: ['Missing job or company data for role analysis'],
+      errors: ['Missing job data for role analysis'],
     };
   }
 
   try {
     const job = state.jobData;
     const company = state.companyContext;
-    const candidateUrls = [
-      job.source_url,
-      ...((company.recent_news ?? []).map(item => item.url)),
-    ].filter(Boolean) as string[];
 
-    const hasUrls = hasValidUrls(candidateUrls);
+    // Build comprehensive research queries
+    const searchQueries = [
+      `${job.company_name} ${job.title} interview process experience`,
+      `${job.company_name} company culture employee reviews 2024`,
+      `${job.company_name} interview questions ${job.level} level`,
+      `${job.title} salary range ${job.location} 2024 2025`,
+      `${job.company_name} recent news changes hiring 2024`,
+      `${job.title} interview preparation ${job.company_name}`
+    ];
 
-    let prompt = `Analyze the interview expectations for a ${job.level} ${job.title} role.
+    let prompt = `Research and analyze comprehensive interview intelligence for a ${job.level} ${job.title} role at ${job.company_name}.
 
-Company context:
-- Name: ${company.name}
-- Values: ${company.values.join(', ') || 'N/A'}
-- Known interview process: ${JSON.stringify(company.interview_process ?? {})}
+Use these research queries to gather current information:
+${searchQueries.map(q => `- ${q}`).join('\n')}
 
-Job highlights:
+Current job context:
 - Location: ${job.location ?? 'unspecified'}
 - Work arrangement: ${job.work_arrangement ?? 'unspecified'}
 - Key requirements: ${job.required_skills.join(', ') || 'None listed'}
+${company ? `- Known company info: ${company.name}, values: ${company.values.join(', ')}` : ''}
 
-Return ONLY a valid JSON object with these exact fields:
+Based on your research findings, return ONLY a valid JSON object:
 {
   "typical_rounds": 4,
-  "focus_areas": ["array", "of", "focus", "topics"],
-  "interview_formats": ["coding", "system design", "behavioral"],
-  "similar_roles": ["related", "job", "titles"]
+  "focus_areas": ["comprehensive array based on research"],
+  "interview_formats": ["specific formats found in research"],
+  "similar_roles": ["related titles from research"],
+  "company_insights": ["recent company developments affecting role"],
+  "salary_intelligence": "market range and negotiation insights",
+  "interview_difficulty": "1-10 scale with current market insights",
+  "preparation_recommendations": ["specific prep advice from research"]
 }`;
 
-    // Add URLs to prompt if available
-    if (hasUrls) {
-      prompt += formatUrlsForPrompt(candidateUrls);
-    }
-
-    // Build request with URL context tool if needed
+    // Use both Google Search and URL Context for comprehensive research
     const request: any = {
       contents: [{
         role: 'user',
         parts: [{ text: prompt }]
-      }]
+      }],
+      tools: [
+        { googleSearch: {} },
+        { url_context: {} }
+      ]
     };
-
-    // Add URL context tool if we have valid URLs
-    if (hasUrls) {
-      request.tools = [{ url_context: {} }];
-    }
 
     const result = await model.generateContent(request);
 
-    const patterns = safeParseJson<RolePattern>(result.response.text(), 'role analysis');
+    const enhancedPatterns = safeParseJson<any>(result.response.text(), 'enhanced role analysis');
+
+    // Update company context with research findings
+    const enhancedCompanyContext = {
+      ...company,
+      name: job.company_name,
+      values: enhancedPatterns.company_insights?.slice(0, 5) || company?.values || ['innovation', 'excellence'],
+      recent_news: enhancedPatterns.company_insights?.map((insight: string) => ({
+        title: insight,
+        url: '',
+        date: new Date().toISOString().split('T')[0]
+      })) || [],
+      interview_process: {
+        typical_rounds: enhancedPatterns.typical_rounds || 4,
+        difficulty_rating: enhancedPatterns.interview_difficulty || '7/10',
+        common_interviewers: [],
+        red_flags: [],
+        green_flags: enhancedPatterns.preparation_recommendations?.slice(0, 3) || [],
+      },
+      confidence_score: 0.9, // High confidence from comprehensive research
+    };
 
     return {
       rolePatterns: {
-        similar_roles: patterns.similar_roles ?? [],
-        typical_rounds: patterns.typical_rounds ?? 4,
-        focus_areas: patterns.focus_areas ?? [],
-        interview_formats: patterns.interview_formats ?? [],
+        similar_roles: enhancedPatterns.similar_roles ?? [],
+        typical_rounds: enhancedPatterns.typical_rounds ?? 4,
+        focus_areas: enhancedPatterns.focus_areas ?? [],
+        interview_formats: enhancedPatterns.interview_formats ?? [],
       } as RolePattern,
+      companyContext: enhancedCompanyContext,
+      marketIntelligence: {
+        salaryRange: enhancedPatterns.salary_intelligence || 'Market competitive',
+        difficultyRating: enhancedPatterns.interview_difficulty || '7/10',
+        preparationTime: '2-3 weeks recommended',
+        keyInsights: enhancedPatterns.preparation_recommendations?.slice(0, 5) || []
+      }
     };
   } catch (error) {
-    return {
-      errors: [`Failed to analyze role patterns: ${error instanceof Error ? error.message : 'Unknown'}`],
-    };
+    console.warn('Enhanced research failed, falling back to basic analysis:', error);
+
+    // Fallback to basic analysis
+    return basicRoleAnalysis(state);
   }
+}
+
+/**
+ * Fallback basic role analysis when enhanced research fails
+ */
+async function basicRoleAnalysis(state: CurriculumState): Promise<Partial<CurriculumState>> {
+  const job = state.jobData!;
+  const company = state.companyContext;
+  const title = job.title || 'Professional';
+  const skills = job.required_skills || [];
+
+  return {
+    rolePatterns: {
+      similar_roles: [`Senior ${title}`, `${title} Lead`, `${title} Manager`],
+      typical_rounds: 4,
+      focus_areas: skills.slice(0, 5),
+      interview_formats: ['behavioral', 'technical', 'case study'],
+    } as RolePattern,
+    warnings: ['Using basic analysis due to research limitations']
+  };
 }

@@ -38,6 +38,12 @@ export const CurriculumStateAnnotation = Annotation.Root({
   jobData: Annotation<ParsedJob>,
   companyContext: Annotation<CompanyContext>,
   rolePatterns: Annotation<RolePattern>,
+  marketIntelligence: Annotation<{
+    salaryRange: string;
+    difficultyRating: string;
+    preparationTime: string;
+    keyInsights: string[];
+  }>,
 
   // Curriculum Phase Outputs
   structure: Annotation<CurriculumStructure>,
