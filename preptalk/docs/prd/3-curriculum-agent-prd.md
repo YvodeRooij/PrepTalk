@@ -12,15 +12,28 @@
 Job seekers struggle to prepare for interviews because they don't know what to expect. Generic advice is insufficient. They need a personalized, structured, and realistic practice plan tailored to a specific job at a specific company. This plan must go beyond a list of topics and create an interactive, guided experience.
 
 ### 1.2 Proposed Solution
-The **Curriculum Maker Agent** is an AI-powered system that generates a comprehensive, multi-round interview curriculum based on a user-provided job description. It acts as an expert "interview coach," designing a full practice plan that includes different interview types (behavioral, technical, system design), topics, and evaluation criteria.
+The **Curriculum Maker Agent** is an AI-powered system that generates a comprehensive, **non-technical** interview curriculum based on a user-provided job description. It acts as an expert "interview coach," designing a behavioral and cultural preparation plan that leverages competitive intelligence to help candidates give exceptional answers to standard interview questions.
+
+### 1.2.1 Competitive Differentiation Strategy
+**Market Gap Identified**: Technical interview preparation is well-served by platforms like LeetCode, HackerRank, and Pramp. However, behavioral/cultural interview preparation remains generic and company-agnostic.
+
+**Our Solution**: Focus exclusively on **non-technical interview preparation** enhanced by competitive intelligence:
+- **Standard Questions**: Interviewers ask universal questions like "Why this company?" and "Tell me about a challenging project"
+- **Exceptional Answers**: Our competitive intelligence helps candidates craft responses that demonstrate deep company understanding
+- **Realistic Personas**: Interviewer personas ask normal questions but are trained to recognize when candidates understand the company's competitive context
+
+**Example Transformation**:
+- **Generic Answer**: "I want to work at Netflix because I love the shows and culture"
+- **CI-Enhanced Answer**: "Netflix's $15B content investment vs Disney's $8B creates unique international localization challenges. Having managed multi-region projects, I'm excited about the operational complexity that comes with Netflix's global-first strategy that competitors haven't matched"
 
 ### 1.3 Key Features
 - **Job Description Ingestion**: Accepts a URL or text of a job description.
-- **Company Research Integration**: Pulls data from our `companies` database to tailor the curriculum.
-- **Multi-Round Structure**: Generates a logical sequence of interview rounds (e.g., Phone Screen, Technical, Final).
-- **Persona-Driven Rounds**: Defines an AI interviewer persona for each round (e.g., "Friendly Recruiter," "Busy Hiring Manager").
-- **Topic & Question Generation**: Creates relevant topics and example questions for each round.
-- **Evaluation Criteria Definition**: Produces a rubric for assessing candidate performance.
+- **Competitive Intelligence Research**: Gathers comprehensive competitive positioning, strategic advantages, and recent developments to create company-specific interview preparation.
+- **Non-Technical Focus**: Generates 5 behavioral/cultural interview rounds (30 minutes each) since technical interview prep is well-covered by competitors.
+- **Dynamic Persona Generation**: Creates realistic interviewer personas using competitive intelligence who ask standard questions but recognize exceptional answers.
+- **Standard Questions + Insider Answers**: Prepares candidates for universal interview questions while providing competitive intelligence insights to craft standout responses.
+- **Company-Specific Preparation**: Uses strategic advantages and recent developments to help candidates demonstrate deep company understanding through standard behavioral questions.
+- **Recognition Pattern Training**: Teaches candidates what exceptional answers sound like to each type of interviewer persona.
 - **Versioning**: Allows curricula to be updated and improved over time.
 
 ### 1.4 Success Metrics
@@ -100,25 +113,34 @@ graph TD
      - CompetitiveIntelligence (competitors, positioning, advantages)
      - CompanyContext (updated with research findings)
 
-3. **Design Structure Node**
+3. **Design Non-Technical Structure Node**
    - **Input**: All research data (JobData, CompanyContext, RolePatterns, CompetitiveIntelligence)
-   - **Method**: Gemini structured generation
-   - **Logic**:
-     - Entry-level: 3 rounds (Phone, Technical, Behavioral)
-     - Mid/Senior: 4-5 rounds (+ System Design)
-     - Staff/Principal: 5-6 rounds (+ Architecture, Leadership)
-   - **Enhanced Context**: Uses competitive intelligence for more realistic round design
-   - **Output**: CurriculumStructure with round types
+   - **Method**: Gemini structured generation focusing on behavioral/cultural assessment
+   - **Logic**: **5 Standard Non-Technical Rounds (All 30 minutes)**:
+     1. **Phone Screen** - Basic motivation and company interest
+     2. **Behavioral Deep Dive** - STAR methodology and past experiences
+     3. **Culture & Values Alignment** - Company culture fit assessment
+     4. **Strategic Role Discussion** - Role understanding and strategic thinking
+     5. **Executive Final** - Leadership alignment and long-term vision
+   - **Differentiation Strategy**: Focus on behavioral/cultural prep since technical interview prep is well-covered by competitors
+   - **Output**: Fixed 5-round non-technical curriculum structure
 
-4. **Generate Rounds Node**
-   - **Input**: CurriculumStructure + all context (including competitive intelligence)
-   - **Method**: Sequential generation per round type
-   - **For each round**:
-     - Generate interviewer persona
-     - Create 5-7 topics with 2-3 questions each
-     - Define evaluation rubric (3-5 criteria)
-     - Incorporate competitive insights for realistic questions
-   - **Output**: Array of Round objects
+4. **Dynamic Persona Generation Node**
+   - **Input**: CurriculumStructure + CompetitiveIntelligence + CompanyContext
+   - **Method**: AI-powered persona creation using competitive intelligence
+   - **Core Innovation**: Creates realistic interviewer personas who ask **standard questions** but recognize **exceptional answers** powered by competitive intelligence
+   - **Persona Generation Process**:
+     - **Base Persona Types**: Recruiter → Manager → Team Member → Senior Leader → Executive
+     - **Dynamic Customization**: Inject company-specific traits from competitive intelligence
+     - **Content Injection Points**: Strategic advantages, recent developments, role uniqueness, cultural DNA
+   - **For each round persona**:
+     - **Identity**: Name, role, tenure, personality (using CI data)
+     - **Background**: Company changes they've lived through (recent developments)
+     - **Knowledge Base**: Competitive advantages they're proud of
+     - **Standard Questions**: 5-7 universal interview questions
+     - **Recognition Patterns**: What answers signal deep company understanding
+     - **Candidate Prep Guidance**: How to weave CI insights into standard responses
+   - **Output**: Array of 5 realistic personas with standard questions + CI-powered recognition guides
 
 5. **Evaluate Quality Node**
    - **Input**: Generated rounds
