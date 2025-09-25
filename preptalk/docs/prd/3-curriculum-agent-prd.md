@@ -78,47 +78,49 @@ graph TD
      - Extract: title, company, level, requirements, responsibilities
    - **Output**: Structured JobData object
 
-2. **Research Company Node**
-   - **Input**: Company name from JobData
-   - **Method**: Gemini URL context with multiple sources
-   - **Sources**:
-     - LinkedIn company page
-     - Glassdoor reviews
-     - Company website (if available)
-   - **Action**:
-     - Build URLs from company name
-     - Single Gemini call with all URLs
-     - Extract interview process, culture, difficulty
-   - **Output**: CompanyContext object with confidence score
+2. **Enhanced Role Analysis Node** (Replaces Company Research + Role Patterns)
+   - **Input**: JobData from parsing
+   - **Method**: Gemini with Google Search + URL Context grounding
+   - **Enhanced Research Process**:
+     - **Dynamic Date Context**: Uses current year/recent period, never hardcoded dates
+     - **12 Research Queries**: 6 basic + 6 competitive intelligence queries
+       - Basic: Company culture, interview process, salary ranges, preparation tips
+       - Competitive: Role comparison vs competitors, strategic advantages, recent developments
+     - **Multi-tool API Call**: Uses both Google Search and URL Context simultaneously
+   - **Competitive Intelligence Output**:
+     - Primary competitors with context
+     - Detailed role comparison vs competitors (2-3 sentences with examples)
+     - Strategic advantages with specific metrics/examples
+     - Recent developments with dates and context
+     - Market positioning analysis for this specific role
+   - **Fallback Handling**: If enhanced research fails, gracefully falls back to basic analysis
+   - **Output**:
+     - RolePatterns (typical rounds, focus areas, formats)
+     - Enhanced MarketIntelligence (salary context, difficulty, trends)
+     - CompetitiveIntelligence (competitors, positioning, advantages)
+     - CompanyContext (updated with research findings)
 
-3. **Analyze Role Patterns Node**
-   - **Input**: JobData + CompanyContext
-   - **Method**: Gemini analysis (no URL needed)
-   - **Action**:
-     - Determine typical interview rounds for this level/role
-     - Identify focus areas based on requirements
-     - Suggest interview format based on company style
-   - **Output**: RolePatterns object
-
-4. **Design Structure Node**
-   - **Input**: All research data (JobData, CompanyContext, RolePatterns)
+3. **Design Structure Node**
+   - **Input**: All research data (JobData, CompanyContext, RolePatterns, CompetitiveIntelligence)
    - **Method**: Gemini structured generation
    - **Logic**:
      - Entry-level: 3 rounds (Phone, Technical, Behavioral)
      - Mid/Senior: 4-5 rounds (+ System Design)
      - Staff/Principal: 5-6 rounds (+ Architecture, Leadership)
+   - **Enhanced Context**: Uses competitive intelligence for more realistic round design
    - **Output**: CurriculumStructure with round types
 
-5. **Generate Rounds Node**
-   - **Input**: CurriculumStructure + all context
+4. **Generate Rounds Node**
+   - **Input**: CurriculumStructure + all context (including competitive intelligence)
    - **Method**: Sequential generation per round type
    - **For each round**:
      - Generate interviewer persona
      - Create 5-7 topics with 2-3 questions each
      - Define evaluation rubric (3-5 criteria)
+     - Incorporate competitive insights for realistic questions
    - **Output**: Array of Round objects
 
-6. **Evaluate Quality Node**
+5. **Evaluate Quality Node**
    - **Input**: Generated rounds
    - **Criteria**:
      - Coverage of job requirements (>90%)
@@ -127,18 +129,25 @@ graph TD
      - Realistic progression
    - **Output**: Quality score (0-100)
 
-7. **Refine Rounds Node** (Conditional)
+6. **Refine Rounds Node** (Conditional)
    - **Triggers**: If quality < 80%
    - **Action**: Re-generate weak areas identified
    - **Limit**: Max 1 refinement attempt
    - **Output**: Updated rounds
 
-8. **Save Curriculum Node**
-   - **Input**: Final curriculum with rounds
+7. **Save Curriculum Node** (Enhanced)
+   - **Input**: Final curriculum with rounds + competitive intelligence
    - **Action**:
      - Save to `curricula` table
      - Save rounds to `curriculum_rounds` table
+     - **NEW**: Save competitive intelligence to `role_intelligence` JSONB column
      - Update job record with curriculum ID
+   - **Competitive Intelligence Storage**:
+     - Role comparison vs competitors
+     - Strategic advantages
+     - Recent role developments
+     - Market context (salary, difficulty, preparation time)
+     - Competitive positioning
    - **Output**: Curriculum ID
 
 ---
@@ -153,7 +162,13 @@ graph TD
     - `title`: e.g., "Senior Software Engineer at Google".
     - `overview`: AI-generated summary.
     - `total_rounds`: Number of rounds determined in Step 3.
-    - `generation_model`: The model used (e.g., 'gpt-4-turbo').
+    - `generation_model`: The model used (e.g., 'gemini-2.5-flash').
+    - **`role_intelligence`** (JSONB): **NEW** - Competitive intelligence storage:
+      - `role_vs_competitors`: How this role differs from competitors
+      - `strategic_advantages`: Company-specific advantages for this role
+      - `recent_role_developments`: Recent changes affecting the role
+      - `market_context`: Salary, difficulty, and preparation insights
+      - `competitive_positioning`: Market position analysis
 
 - **`curriculum_rounds` Table**: Stores the details for each round.
     - `curriculum_id`: Foreign key to the `curricula` table.
@@ -224,18 +239,54 @@ graph TD
 
 ## 5. Error Handling & Edge Cases
 
-- **Invalid URL/Unscrapable Page**: The agent should fail gracefully with a clear error message.
-- **Unsupported Language**: If the job description is not in English, return an error. (Future: support more languages).
-- **Minimalist Job Description**: If the description is too sparse, the agent should rely on the job title and any available company data, but flag the curriculum as "low confidence".
-- **Conflicting Information**: If the job description contradicts company data, prioritize the job description as the source of truth.
-- **LLM Failure/Timeout**: Implement retry logic with exponential backoff for transient LLM API errors. After 3 failed retries, mark the generation job as failed.
-- **Rate Limiting**: Ensure the system handles rate limits from both our internal API and the external LLM provider.
+### 5.1 Implemented Error Handling
+- **Environment Validation**: Clear error messages for missing API keys/database credentials
+- **JSON Parsing Failures**: Detects when LLM returns "I apologize..." instead of JSON, uses fallbacks
+- **Safe Property Access**: Defensive coding prevents null/undefined crashes (`?.` operators)
+- **Enhanced Research Fallback**: If competitive intelligence fails, gracefully falls back to basic analysis
+- **Malformed Data Handling**: System continues with warnings rather than crashing
+
+### 5.2 LangGraph Built-in Protections
+- **Recursion Limits**: Prevents infinite loops with configurable limits
+- **Tool Error Handling**: ToolNode automatically catches and converts errors to messages
+- **State Validation**: Ensures nodes return proper state structures
+- **Automatic Retries**: Built-in retry mechanisms for transient failures
+
+### 5.3 Edge Cases
+- **Invalid URL/Unscrapable Page**: Returns helpful error message, suggests manual job description
+- **Unsupported Language**: Returns error with language detection (Future: support more languages)
+- **Minimalist Job Description**: Uses fallback data, flags curriculum as "low confidence"
+- **Conflicting Information**: Prioritizes job description as source of truth
+- **API Rate Limiting**: Handles gracefully with exponential backoff
+- **LLM Non-JSON Responses**: Detects apologetic responses, provides structured fallbacks
+
+### 5.4 Observability & Debugging
+- **Future**: LangSmith integration for automatic error tracking and debugging
+- **Structured Logging**: Comprehensive error context for troubleshooting
+- **Quality Metrics**: Tracks parsing confidence and research success rates
 
 ---
 
-## 6. Future Improvements
+## 6. Implementation Status & Future Improvements
 
-- **V2: Curriculum from Scratch**: Allow users to generate a curriculum by simply describing a role, without a formal job description.
-- **V2: User Feedback Loop**: Allow users to rate the quality of a curriculum. Use these ratings to fine-tune the generation prompts.
-- **V3: Dynamic Adjustment**: If a user struggles with a topic, the system could suggest a "remedial" round or add more foundational questions to the existing curriculum.
-- **V3: Multi-language Support**: Fine-tune models to handle job descriptions in Spanish, German, etc.
+### 6.1 Current Status (v1.0 - COMPLETED)
+- ✅ **LangGraph Architecture**: Complete state-based orchestration
+- ✅ **Job URL Parsing**: Gemini URL context for direct job posting analysis
+- ✅ **Competitive Intelligence**: Enhanced research with 12 comprehensive queries
+- ✅ **Dynamic Date Context**: Future-proof date handling (no hardcoded years)
+- ✅ **JSONB Storage**: Flexible competitive intelligence persistence
+- ✅ **Error Handling**: Production-ready defensive coding with graceful degradation
+- ✅ **End-to-End Testing**: Comprehensive test coverage with Netflix job validation
+
+### 6.2 Immediate Next Steps
+- **LangSmith Integration**: Automatic error tracking and performance monitoring
+- **API Integration**: Connect to existing PrepTalk backend and authentication
+- **Frontend Integration**: Display competitive intelligence in curriculum UI
+
+### 6.3 Future Improvements
+- **V2: Curriculum from Scratch**: Generate curricula from role descriptions without formal job postings
+- **V2: User Feedback Loop**: Rating system to fine-tune generation quality
+- **V2: Enhanced Competitive Analysis**: Company-level intelligence caching for efficiency
+- **V3: Dynamic Adjustment**: Adaptive curricula based on user performance
+- **V3: Multi-language Support**: International job posting support
+- **V3: Real-time Updates**: Live competitive intelligence updates as market conditions change
