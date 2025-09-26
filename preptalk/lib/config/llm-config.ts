@@ -2,7 +2,7 @@
 // Supports Gemini, OpenAI, Anthropic, Grok with flexible task-specific model selection
 
 export interface ModelConfig {
-  provider: 'gemini' | 'openai' | 'anthropic' | 'grok';
+  provider: 'gemini' | 'openai' | 'anthropic' | 'grok' | 'mistral';
   model: string;
   temperature: number;
   maxTokens: number;
@@ -13,8 +13,8 @@ export interface ModelConfig {
 
 export interface LLMConfig {
   // Provider Selection
-  primaryProvider: 'gemini' | 'openai' | 'anthropic' | 'grok';
-  fallbackProviders: Array<'gemini' | 'openai' | 'anthropic' | 'grok'>;
+  primaryProvider: 'gemini' | 'openai' | 'anthropic' | 'grok' | 'mistral';
+  fallbackProviders: Array<'gemini' | 'openai' | 'anthropic' | 'grok' | 'mistral'>;
 
   // Task-Specific Models for curriculum generation
   models: {
@@ -26,7 +26,14 @@ export interface LLMConfig {
     quality_evaluation: ModelConfig;
   };
 
-  // Rate Limiting & Performance
+  // Mistral OCR specific configuration
+  mistralOCR?: {
+    enabled: boolean;
+    model: 'mistral-ocr-2505' | 'pixtral-large-2411' | 'pixtral-12b';
+    maxPagesPerRequest: number;
+    costPerPage: number;
+  };
+
   rateLimits: Record<string, {
     requestsPerMinute: number;
     tokensPerMinute: number;
@@ -67,7 +74,7 @@ export interface LLMConfig {
 // Default configuration optimized for curriculum generation
 export const DEFAULT_LLM_CONFIG: LLMConfig = {
   primaryProvider: 'openai',
-  fallbackProviders: ['gemini', 'anthropic'],
+  fallbackProviders: ['gemini', 'anthropic', 'mistral'],
 
   models: {
     // Job parsing: Use Gemini for URL context support
@@ -117,6 +124,14 @@ export const DEFAULT_LLM_CONFIG: LLMConfig = {
       temperature: 0.2,
       maxTokens: 1500
     }
+  },
+
+  // Mistral OCR configuration for CV analysis
+  mistralOCR: {
+    enabled: true,
+    model: 'mistral-ocr-2505',
+    maxPagesPerRequest: 10,
+    costPerPage: 0.001
   },
 
   rateLimits: {

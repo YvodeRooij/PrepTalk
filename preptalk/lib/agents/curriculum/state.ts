@@ -18,6 +18,9 @@ import type {
   NonTechnicalRoundType
 } from './nodes/persona-generation';
 
+// Import CV analysis types
+import type { CVAnalysis, CVInsights } from '../../schemas/cv-analysis';
+
 // Define the state annotation for curriculum generation graph
 export const CurriculumStateAnnotation = Annotation.Root({
   // Input
@@ -37,6 +40,17 @@ export const CurriculumStateAnnotation = Annotation.Root({
     focusArea?: 'career_transition' | 'leadership_stories' | 'technical_bridge' | 'industry_switch';
     concern?: 'industry_knowledge' | 'leadership_experience' | 'culture_fit' | 'role_complexity';
     background?: string;
+  } | null>({
+    default: () => null,
+  }),
+
+  // CV Analysis Data
+  cvData: Annotation<{
+    analysis: CVAnalysis | null;
+    insights: CVInsights | null;
+    matchScore?: number;
+    uploadedAt?: string;
+    processingModel?: string;
   } | null>({
     default: () => null,
   }),

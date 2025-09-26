@@ -10,7 +10,9 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Textarea } from "@/components/ui/textarea"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Sparkles, Target, AlertCircle, User } from "lucide-react"
+import { Loader2, Sparkles, Target, AlertCircle, User, FileText } from "lucide-react"
+import { CVUpload } from "@/components/cv-upload"
+import { CVAnalysis } from "@/lib/schemas/cv-analysis"
 
 const formSchema = z.object({
   focusArea: z.enum(["career_transition", "leadership_stories", "technical_bridge", "industry_switch"], {
@@ -22,7 +24,10 @@ const formSchema = z.object({
   background: z.string().max(200, "Background must be less than 200 characters").optional(),
 })
 
-export type PersonalizationData = z.infer<typeof formSchema>
+export type PersonalizationData = z.infer<typeof formSchema> & {
+  cvAnalysis?: CVAnalysis
+  cvInsights?: any
+}
 
 interface PersonalizationFormProps {
   jobData: {
@@ -91,6 +96,8 @@ const concernOptions = [
 
 export function PersonalizationForm({ jobData, onSubmit, onSkip, isLoading = false }: PersonalizationFormProps) {
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showCVUpload, setShowCVUpload] = useState(false)
+  const [cvData, setCVData] = useState<{ analysis?: CVAnalysis, insights?: any } | null>(null)
 
   const form = useForm<PersonalizationData>({
     resolver: zodResolver(formSchema),
@@ -102,7 +109,19 @@ export function PersonalizationForm({ jobData, onSubmit, onSkip, isLoading = fal
   })
 
   function handleSubmit(values: PersonalizationData) {
-    onSubmit(values)
+    onSubmit({
+      ...values,
+      cvAnalysis: cvData?.analysis,
+      cvInsights: cvData?.insights
+    })
+  }
+
+  const handleCVUpload = (data: any) => {
+    setCVData({
+      analysis: data,
+      insights: data.insights
+    })
+    setShowCVUpload(false)
   }
 
   return (
@@ -226,18 +245,48 @@ export function PersonalizationForm({ jobData, onSubmit, onSkip, isLoading = fal
                 )}
               />
 
-              {/* Optional Background */}
+              {/* Optional CV Upload */}
               <div className="space-y-4">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowAdvanced(!showAdvanced)}
-                  className="text-sm"
-                >
-                  <User className="h-4 w-4 mr-2" />
-                  {showAdvanced ? 'Hide' : 'Add'} background info (optional)
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowCVUpload(!showCVUpload)}
+                    className="text-sm"
+                  >
+                    <FileText className="h-4 w-4 mr-2" />
+                    {showCVUpload ? 'Hide' : 'Upload'} CV for better personalization
+                    {cvData && <Badge variant="secondary" className="ml-2">CV Uploaded</Badge>}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowAdvanced(!showAdvanced)}
+                    className="text-sm"
+                  >
+                    <User className="h-4 w-4 mr-2" />
+                    {showAdvanced ? 'Hide' : 'Add'} background info
+                  </Button>
+                </div>
+
+                {showCVUpload && (
+                  <div className="p-4 border rounded-lg bg-muted/30">
+                    <CVUpload
+                      onUploadComplete={handleCVUpload}
+                      className="max-w-full"
+                    />
+                    {cvData && (
+                      <div className="mt-4 p-3 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg">
+                        <p className="text-sm text-green-800 dark:text-green-200">
+                          ✓ CV analyzed: {cvData.analysis?.personalInfo?.fullName} •
+                          {cvData.analysis?.summary?.yearsOfExperience} years experience
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {showAdvanced && (
                   <FormField

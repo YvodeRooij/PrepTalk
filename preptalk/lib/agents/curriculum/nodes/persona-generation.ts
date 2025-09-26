@@ -63,40 +63,83 @@ export type NonTechnicalRoundType =
   | 'executive_final';
 
 // Personalization helper functions for adaptive question generation
-function buildPersonalizationContext(userProfile: any, roundType: NonTechnicalRoundType): string {
-  if (!userProfile) return '';
+function buildPersonalizationContext(userProfile: any, cvData: any, roundType: NonTechnicalRoundType): string {
+  if (!userProfile && !cvData) return '';
 
   let context = '';
 
-  // Add user context for personalized questions
-  if (userProfile.excitement || userProfile.concerns || userProfile.weakAreas || userProfile.backgroundContext) {
-    context += 'PERSONALIZATION CONTEXT:\n';
+  // Add CV-based context if available
+  if (cvData?.analysis) {
+    context += 'CANDIDATE PROFILE (from CV):\n';
 
-    if (userProfile.excitement) {
-      context += `- EXCITEMENT: ${userProfile.excitement}\n`;
+    if (cvData.analysis.personalInfo?.fullName) {
+      context += `- NAME: ${cvData.analysis.personalInfo.fullName}\n`;
     }
-    if (userProfile.concerns) {
-      context += `- CONCERNS: ${userProfile.concerns}\n`;
+    if (cvData.analysis.summary?.yearsOfExperience) {
+      context += `- YEARS OF EXPERIENCE: ${cvData.analysis.summary.yearsOfExperience}\n`;
     }
-    if (userProfile.weakAreas?.length) {
-      context += `- WEAK AREAS TO PRACTICE: ${userProfile.weakAreas.join(', ')}\n`;
+    if (cvData.analysis.summary?.currentRole) {
+      context += `- CURRENT ROLE: ${cvData.analysis.summary.currentRole}\n`;
     }
-    if (userProfile.backgroundContext) {
-      context += `- BACKGROUND: ${userProfile.backgroundContext}\n`;
+    if (cvData.analysis.skills?.technical?.length) {
+      context += `- KEY TECHNICAL SKILLS: ${cvData.analysis.skills.technical.slice(0, 5).join(', ')}\n`;
     }
-    if (userProfile.preparationGoals) {
-      context += `- PREPARATION GOALS: ${userProfile.preparationGoals}\n`;
+    if (cvData.analysis.skills?.soft?.length) {
+      context += `- SOFT SKILLS: ${cvData.analysis.skills.soft.slice(0, 3).join(', ')}\n`;
+    }
+    if (cvData.insights?.experienceLevel) {
+      context += `- EXPERIENCE LEVEL: ${cvData.insights.experienceLevel}\n`;
+    }
+    if (cvData.matchScore) {
+      context += `- JOB MATCH SCORE: ${cvData.matchScore}%\n`;
     }
     context += '\n';
+  }
+
+  // Add user context for personalized questions
+  if (userProfile) {
+    if (userProfile.excitement || userProfile.concerns || userProfile.weakAreas || userProfile.backgroundContext) {
+      context += 'PERSONALIZATION CONTEXT:\n';
+
+      if (userProfile.excitement) {
+        context += `- EXCITEMENT: ${userProfile.excitement}\n`;
+      }
+      if (userProfile.concerns) {
+        context += `- CONCERNS: ${userProfile.concerns}\n`;
+      }
+      if (userProfile.weakAreas?.length) {
+        context += `- WEAK AREAS TO PRACTICE: ${userProfile.weakAreas.join(', ')}\n`;
+      }
+      if (userProfile.backgroundContext) {
+        context += `- BACKGROUND: ${userProfile.backgroundContext}\n`;
+      }
+      if (userProfile.preparationGoals) {
+        context += `- PREPARATION GOALS: ${userProfile.preparationGoals}\n`;
+      }
+      context += '\n';
+    }
   }
 
   return context;
 }
 
-function getAdaptationStrategy(userProfile: any, roundType: NonTechnicalRoundType): string {
-  if (!userProfile) return '';
+function getAdaptationStrategy(userProfile: any, cvData: any, roundType: NonTechnicalRoundType): string {
+  if (!userProfile && !cvData) return '';
 
   let strategy = 'ADAPTATION STRATEGY:\n';
+
+  // CV-based adaptation if available
+  if (cvData?.insights) {
+    if (cvData.insights.experienceLevel) {
+      strategy += `- Adapt questions for ${cvData.insights.experienceLevel}-level candidate\n`;
+    }
+    if (cvData.insights.skillGaps?.length) {
+      strategy += `- Help bridge skill gaps: ${cvData.insights.skillGaps.slice(0, 2).join(', ')}\n`;
+    }
+    if (cvData.insights.readiness?.areasForImprovement?.length) {
+      strategy += `- Focus on improvement areas: ${cvData.insights.readiness.areasForImprovement[0]}\n`;
+    }
+  }
 
   // Round-specific personalization strategies
   switch (roundType) {
@@ -122,10 +165,10 @@ function getAdaptationStrategy(userProfile: any, roundType: NonTechnicalRoundTyp
       break;
   }
 
-  if (userProfile.concerns) {
+  if (userProfile?.concerns) {
     strategy += '- Frame questions to address stated concerns positively\n';
   }
-  if (userProfile.weakAreas?.length) {
+  if (userProfile?.weakAreas?.length) {
     strategy += `- Include more practice opportunities for: ${userProfile.weakAreas.join(', ')}\n`;
   }
 
@@ -133,10 +176,25 @@ function getAdaptationStrategy(userProfile: any, roundType: NonTechnicalRoundTyp
   return strategy;
 }
 
-function getUserPersonalizationContext(userProfile: any): string {
-  if (!userProfile) return '';
+function getUserPersonalizationContext(userProfile: any, cvData?: any): string {
+  if (!userProfile && !cvData) return '';
 
   let context = '';
+
+  // Add CV-based context if available
+  if (cvData?.analysis) {
+    context += '\nCANDIDATE BACKGROUND (from CV):\n';
+    if (cvData.analysis.summary?.currentRole) {
+      context += `- Current Role: ${cvData.analysis.summary.currentRole}\n`;
+    }
+    if (cvData.analysis.summary?.yearsOfExperience) {
+      context += `- Experience: ${cvData.analysis.summary.yearsOfExperience} years\n`;
+    }
+    if (cvData.analysis.experience?.[0]) {
+      const recent = cvData.analysis.experience[0];
+      context += `- Most Recent: ${recent.position} at ${recent.company}\n`;
+    }
+  }
 
   // Handle new rich text format
   if (userProfile.excitement || userProfile.concerns || userProfile.weakAreas || userProfile.backgroundContext) {
@@ -246,7 +304,7 @@ JOB DETAILS:
 - Level: ${jobData.level}
 - Company: ${jobData.company_name}
 
-${getUserPersonalizationContext(state.userProfile)}
+${getUserPersonalizationContext(state.userProfile, state.cvData)}
 
 Create a realistic persona who:
 1. Works at ${jobData.company_name} and understands these competitive advantages
@@ -360,8 +418,8 @@ export async function generateStandardQuestions(
 
   for (const persona of state.generatedPersonas) {
     // Build personalization context for adaptive question generation
-    const personalizationContext = buildPersonalizationContext(state.userProfile, persona.round_type);
-    const adaptationStrategy = getAdaptationStrategy(state.userProfile, persona.round_type);
+    const personalizationContext = buildPersonalizationContext(state.userProfile, state.cvData, persona.round_type);
+    const adaptationStrategy = getAdaptationStrategy(state.userProfile, state.cvData, persona.round_type);
 
     const questionsPrompt = `Generate 6 standard interview questions for a ${persona.round_type.replace('_', ' ')} interview round.
 
