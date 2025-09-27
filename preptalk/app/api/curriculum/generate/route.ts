@@ -14,9 +14,17 @@ type CurriculumRecord = {
   overview: string | null;
   total_rounds: number;
   difficulty_level: string | null;
-  quality_score: number | null;
+  completeness_score: number | null;
   created_at: string;
   curriculum_rounds: CurriculumRoundRecord[] | null;
+  // NEW: Enhanced data fields
+  cv_analysis_id: string | null;
+  unified_context: any;
+  user_personalization: any;
+  discovery_metadata: any;
+  cv_integration: any;
+  generation_metadata: any;
+  role_intelligence: any;
   [key: string]: unknown;
 };
 
@@ -57,8 +65,16 @@ export async function POST(request: NextRequest) {
         backgroundContext?: string;
         preparationGoals?: string;
       } | null;
+      cvData?: {
+        analysis?: any;
+        insights?: any;
+        matchScore?: number;
+        uploadedAt?: string;
+        processingModel?: string;
+        cv_analysis_id?: string; // 🔗 CV analysis ID for linking
+      } | null;
     };
-    const { input, options = {}, userProfile } = body;
+    const { input, options = {}, userProfile, cvData } = body;
 
     // Validate input
     if (!input || typeof input !== 'string') {
@@ -137,9 +153,15 @@ export async function POST(request: NextRequest) {
       const areas = userProfile.weakAreas?.join(', ') || 'none specified';
       console.log(`[Curriculum] Personalization: Concerns: ${userProfile.concerns || 'none'}, Weak areas: ${areas}`);
     }
+    if (cvData) {
+      const fullName = cvData.analysis?.personalInfo?.fullName || 'Unknown';
+      const experience = cvData.analysis?.summary?.yearsOfExperience || 0;
+      const cvAnalysisId = cvData.cv_analysis_id || 'No ID';
+      console.log(`[Curriculum] CV Data: ${fullName}, ${experience} years experience, Match Score: ${cvData.matchScore}%, CV Analysis ID: ${cvAnalysisId}`);
+    }
 
     const startTime = Date.now();
-    const curriculumId = await agent.generate(input, userProfile);
+    const curriculumId = await agent.generate(input, userProfile, cvData);
     const duration = (Date.now() - startTime) / 1000;
 
     console.log(`[Curriculum] Generated ${curriculumId} in ${duration}s for user ${userId}`);
@@ -209,11 +231,19 @@ export async function POST(request: NextRequest) {
         overview: curriculum.overview,
         total_rounds: curriculum.total_rounds,
         difficulty_level: curriculum.difficulty_level,
-        quality_score: curriculum.quality_score,
+        completeness_score: curriculum.completeness_score,
         rounds: (curriculum.curriculum_rounds ?? [])
           .slice()
           .sort((a, b) => a.round_number - b.round_number),
-        created_at: curriculum.created_at
+        created_at: curriculum.created_at,
+        // NEW: Include enhanced data in API response
+        cv_analysis_id: curriculum.cv_analysis_id,
+        unified_context: curriculum.unified_context,
+        user_personalization: curriculum.user_personalization,
+        discovery_metadata: curriculum.discovery_metadata,
+        cv_integration: curriculum.cv_integration,
+        generation_metadata: curriculum.generation_metadata,
+        role_intelligence: curriculum.role_intelligence
       }
     });
 

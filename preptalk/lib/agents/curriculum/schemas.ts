@@ -160,17 +160,17 @@ export const InterviewerPersonaGenerationSchema = z.object({
 
 export const TopicSchema = z.object({
   topic: z.string().describe('Topic name'),
-  subtopics: z.array(z.string()).optional().describe('Subtopics'),
-  depth: z.enum(['basic', 'intermediate', 'advanced']).optional().describe('Topic depth'),
-  time_allocation: z.number().int().optional().describe('Time allocation'),
-  must_cover: z.boolean().optional().describe('Must cover flag'),
-  question_count: z.number().int().optional().describe('Question count'),
-  difficulty_progression: z.string().optional().describe('Difficulty progression'),
+  subtopics: z.array(z.string()).optional().nullable().describe('Subtopics'),
+  depth: z.enum(['basic', 'intermediate', 'advanced']).optional().nullable().describe('Topic depth'),
+  time_allocation: z.number().int().optional().nullable().describe('Time allocation'),
+  must_cover: z.boolean().optional().nullable().describe('Must cover flag'),
+  question_count: z.number().int().optional().nullable().describe('Question count'),
+  difficulty_progression: z.string().optional().nullable().describe('Difficulty progression'),
   questions: z.array(z.object({
     text: z.string().describe('Question text'),
-    difficulty: z.string().optional().describe('Question difficulty'),
-    expected_duration: z.number().optional().describe('Expected duration')
-  })).optional().describe('Questions for topic')
+    difficulty: z.string().optional().nullable().describe('Question difficulty'),
+    expected_duration: z.number().optional().nullable().describe('Expected duration')
+  })).optional().nullable().describe('Questions for topic')
 });
 
 export const EvaluationCriteriaSchema = z.object({
@@ -181,15 +181,15 @@ export const EvaluationCriteriaSchema = z.object({
 
 export const RoundContentResponseSchema = z.object({
   interviewer_persona: InterviewerPersonaGenerationSchema.describe('Interviewer persona'),
-  topics: z.array(TopicSchema).optional().describe('Interview topics'),
-  evaluation_criteria: z.array(EvaluationCriteriaSchema).optional().describe('Evaluation criteria'),
+  topics: z.array(TopicSchema).optional().nullable().describe('Interview topics'),
+  evaluation_criteria: z.array(EvaluationCriteriaSchema).optional().nullable().describe('Evaluation criteria'),
   sample_questions: z.array(z.object({
     text: z.string().describe('Question text'),
-    difficulty: z.string().optional().describe('Question difficulty'),
-    expected_duration: z.number().optional().describe('Expected duration')
-  })).optional().describe('Sample questions'),
-  opening_script: z.string().optional().describe('Opening script'),
-  closing_script: z.string().optional().describe('Closing script')
+    difficulty: z.string().optional().nullable().describe('Question difficulty'),
+    expected_duration: z.number().optional().nullable().describe('Expected duration')
+  })).optional().nullable().describe('Sample questions'),
+  opening_script: z.string().optional().nullable().describe('Opening script'),
+  closing_script: z.string().optional().nullable().describe('Closing script')
 });
 
 export const QualityEvaluationSchema = z.object({

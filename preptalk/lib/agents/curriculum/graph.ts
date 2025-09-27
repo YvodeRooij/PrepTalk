@@ -18,6 +18,9 @@ import {
   analyzeRole
 } from './nodes/research';
 import {
+  unifiedContextEngine
+} from './nodes/unified-context-engine';
+import {
   generateDynamicPersonas,
   generateStandardQuestions,
   generateCandidatePrep
@@ -121,6 +124,9 @@ export class CurriculumAgent {
       .addNode("parse_job", (state) => this.wrapWithProvider(parseJob)(state))
       .addNode("analyze_role", (state) => this.wrapWithProvider(analyzeRole)(state))
 
+      // CRITICAL: Unified Context Engine - Synthesizes job + user + CV data
+      .addNode("unified_context_engine", (state) => this.wrapWithProvider(unifiedContextEngine)(state))
+
       // NEW: Non-Technical Persona Generation Phase
       .addNode("generate_personas", (state) => this.wrapWithProvider(generateDynamicPersonas)(state))
       .addNode("generate_questions", (state) => this.wrapWithProvider(generateStandardQuestions)(state))
@@ -142,8 +148,10 @@ export class CurriculumAgent {
       // validate_sources uses Command to route to merge_research or fallback
       .addEdge("merge_research", "parse_job")
       .addEdge("parse_job", "analyze_role")
-      // NEW: Insert persona generation after research, before curriculum design
-      .addEdge("analyze_role", "generate_personas")
+      // CRITICAL: Unified Context Engine synthesizes all inputs before persona generation
+      .addEdge("analyze_role", "unified_context_engine")
+      // NEW: Insert persona generation after unified context synthesis
+      .addEdge("unified_context_engine", "generate_personas")
       .addEdge("generate_personas", "generate_questions")
       .addEdge("generate_questions", "generate_prep_guides")
       .addEdge("generate_prep_guides", "design_structure")
@@ -211,6 +219,14 @@ export class CurriculumAgent {
         recentDevelopments: ['Continued market presence'],
         competitivePositioning: 'Established market player with growth focus',
       },
+      // Basic unified context for fallback scenarios
+      unifiedContext: {
+        strengthAmplifiers: ['Leverage analytical background for data-driven insights'],
+        gapBridges: ['Connect previous experience to new role requirements'],
+        confidenceBuilders: ['Frame career transition as strategic growth opportunity'],
+        ciIntegrationStrategy: 'Weave company research naturally into responses about motivation and fit',
+        personalizedApproach: 'Supportive coaching approach focusing on transferable skills and growth mindset'
+      },
       warnings: [...(state.warnings || []), 'Using fallback research with limited data'],
     };
   }
@@ -229,6 +245,13 @@ export class CurriculumAgent {
       focusArea?: string;
       concern?: string;
       background?: string;
+    } | null,
+    cvData?: {
+      analysis?: any;
+      insights?: any;
+      matchScore?: number;
+      uploadedAt?: string;
+      processingModel?: string;
     } | null
   ): Promise<string> {
     // Ensure initialization is complete before running
@@ -240,6 +263,7 @@ export class CurriculumAgent {
     const initialState: Partial<CurriculumState> = {
       userInput,
       userProfile: userProfile || null,
+      cvData: cvData || null,
       startTime: Date.now(),
       discoveredSources: [],
       errors: [],

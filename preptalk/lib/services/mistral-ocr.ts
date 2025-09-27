@@ -4,10 +4,11 @@
 import { CVAnalysisSchema, CVInsightsSchema, type CVAnalysis, type CVInsights } from '../schemas/cv-analysis';
 import { z } from 'zod';
 
-const MISTRAL_API_URL = 'https://api.mistral.ai/v1/chat/completions';
+const MISTRAL_OCR_API_URL = 'https://api.mistral.ai/v1/ocr';
+const MISTRAL_CHAT_API_URL = 'https://api.mistral.ai/v1/chat/completions';
 
 export interface OCRProcessingOptions {
-  model?: 'mistral-ocr-2505' | 'pixtral-large-2411' | 'pixtral-12b';
+  model?: 'mistral-ocr-latest';
   extractionDetail?: 'basic' | 'detailed' | 'comprehensive';
   targetRole?: string;
 }
@@ -18,15 +19,21 @@ export class MistralOCRService {
 
   constructor(apiKey?: string) {
     this.apiKey = apiKey || process.env.MISTRAL_API_KEY || '';
-    this.model = 'mistral-ocr-2505'; // Latest OCR model
+    this.model = 'mistral-ocr-latest'; // Official Mistral OCR model
 
     if (!this.apiKey) {
-      console.warn('⚠️  Mistral API key not configured - CV analysis will use mock data');
+      console.warn('⚠️ Mistral API key not configured - CV analysis will use mock data');
+    } else {
+      // Basic API key validation
+      if (!this.apiKey.startsWith('mr-')) {
+        console.warn('⚠️ Mistral API key format looks incorrect (should start with "mr-")');
+      }
+      console.log('✅ Mistral API key configured, length:', this.apiKey.length);
     }
   }
 
   /**
-   * Process CV using Mistral OCR API
+   * Process CV using Mistral OCR API (official endpoint)
    */
   async processCV(
     fileBuffer: Buffer,
@@ -38,61 +45,194 @@ export class MistralOCRService {
     }
 
     try {
+      // Step 1: Extract raw text using Mistral OCR API
       const base64File = fileBuffer.toString('base64');
       const dataUri = `data:${mimeType};base64,${base64File}`;
 
-      const response = await fetch(MISTRAL_API_URL, {
+      console.log('📄 Processing CV with Mistral OCR API...');
+
+      // Correct request payload per TypeScript SDK
+      const requestBody = {
+        model: options.model || this.model,
+        document: {
+          documentUrl: dataUri,
+          type: "document_url"
+        }
+      };
+
+      // Debug logging (don't log full base64)
+      const debugPayload = {
+        ...requestBody,
+        document: {
+          ...requestBody.document,
+          documentUrl: dataUri.slice(0, 100) + '...[base64 truncated]'
+        }
+      };
+      console.log('🔍 OCR Request payload:', JSON.stringify(debugPayload, null, 2));
+
+      const ocrResponse = await fetch(MISTRAL_OCR_API_URL, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          model: options.model || this.model,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'text',
-                  text: this.buildExtractionPrompt(options)
-                },
-                {
-                  type: 'image_url',
-                  image_url: {
-                    url: dataUri
-                  }
-                }
-              ]
-            }
-          ],
-          temperature: 0.1,
-          max_tokens: 4000,
-          response_format: { type: 'json_object' }
-        })
+        body: JSON.stringify(requestBody)
       });
 
-      if (!response.ok) {
-        throw new Error(`Mistral API error: ${response.status} ${response.statusText}`);
+      if (!ocrResponse.ok) {
+        const errorText = await ocrResponse.text();
+        console.error('Mistral OCR API error:', errorText);
+
+        // Check for common authentication/permission errors
+        if (ocrResponse.status === 401) {
+          throw new Error('Mistral API authentication failed - check your API key');
+        }
+        if (ocrResponse.status === 403) {
+          throw new Error('Mistral API access forbidden - check API key permissions for OCR');
+        }
+        if (ocrResponse.status === 400) {
+          throw new Error(`Mistral API bad request: ${errorText.slice(0, 200)}`);
+        }
+        if (ocrResponse.status === 422) {
+          console.error('⚠️ Mistral OCR API 422 - Request format issue:', errorText);
+          throw new Error('Mistral OCR API request format rejected - falling back to mock data');
+        }
+
+        throw new Error(`Mistral OCR API error: ${ocrResponse.status} ${ocrResponse.statusText}`);
       }
 
-      const data = await response.json();
-      const content = data.choices[0]?.message?.content || '{}';
-      const parsed = JSON.parse(content);
+      // Parse JSON response with error handling
+      let ocrData;
+      try {
+        const responseText = await ocrResponse.text();
 
-      // Add metadata
-      parsed.metadata = {
+        // Check if response is HTML (common for server errors)
+        if (responseText.trim().startsWith('<')) {
+          console.error('⚠️ Received HTML response instead of JSON:', responseText.slice(0, 500));
+          throw new Error('Mistral OCR API returned HTML error page instead of JSON');
+        }
+
+        ocrData = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error('⚠️ Failed to parse OCR response as JSON:', parseError);
+        throw new Error('Invalid JSON response from Mistral OCR API');
+      }
+
+      // Extract text from the correct Mistral OCR response format
+      let extractedText = '';
+      if (ocrData.pages && ocrData.pages.length > 0) {
+        // Combine text from all pages
+        extractedText = ocrData.pages
+          .map((page: any) => page.markdown || '')
+          .join('\n\n')
+          .trim();
+      }
+
+      console.log('✅ OCR extraction completed, text length:', extractedText.length);
+
+      // If no text extracted, log the response structure for debugging
+      if (extractedText.length === 0) {
+        console.warn('⚠️ No text extracted. OCR response structure:', JSON.stringify(ocrData, null, 2));
+      }
+
+      // Step 2: Structure the text (with fallbacks)
+      let structuredData;
+
+      if (extractedText.length === 0) {
+        console.warn('⚠️ No text extracted from OCR - using minimal fallback structure');
+        structuredData = this.createMinimalStructure();
+      } else {
+        try {
+          structuredData = await this.structureExtractedText(extractedText, options);
+        } catch (error) {
+          console.warn('⚠️ Text structuring failed - using partial structure:', error);
+          structuredData = this.createMinimalStructure(extractedText);
+        }
+      }
+
+      // Add metadata with appropriate confidence
+      structuredData.metadata = {
         extractionDate: new Date().toISOString(),
         documentType: mimeType.includes('pdf') ? 'PDF' : 'Image',
-        confidence: 0.95,
-        processingModel: options.model || this.model
+        confidence: extractedText.length > 0 ? 0.90 : 0.10,
+        processingModel: options.model || this.model,
+        warnings: extractedText.length === 0 ? ['No text extracted from document'] : []
       };
 
-      // Validate with schema
-      return CVAnalysisSchema.parse(parsed);
+      // Validate with schema (now flexible and forgiving)
+      try {
+        return CVAnalysisSchema.parse(structuredData);
+      } catch (validationError) {
+        console.warn('⚠️ Schema validation failed, using safe fallback:', validationError);
+        return this.createSafeAnalysis(mimeType);
+      }
     } catch (error) {
       console.error('Mistral OCR processing failed:', error);
+
+      // If authentication, format, or API key issues, use fallback
+      if (error instanceof Error && (
+        error.message.includes('authentication') ||
+        error.message.includes('API key') ||
+        error.message.includes('401') ||
+        error.message.includes('403') ||
+        error.message.includes('422') ||
+        error.message.includes('falling back to mock data')
+      )) {
+        console.warn('⚠️ API issue - falling back to mock data:', error.message);
+        return this.processCVMock(fileBuffer, mimeType);
+      }
+
       throw new Error(`CV processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  /**
+   * Structure extracted text using Mistral chat API
+   */
+  private async structureExtractedText(text: string, options: OCRProcessingOptions): Promise<any> {
+    const structuringPrompt = this.buildStructuringPrompt(text, options);
+
+    const response = await fetch(MISTRAL_CHAT_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'mistral-large-latest',
+        messages: [
+          {
+            role: 'user',
+            content: structuringPrompt
+          }
+        ],
+        temperature: 0.1,
+        max_tokens: 4000,
+        response_format: { type: 'json_object' }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Mistral Chat API error:', errorText);
+      throw new Error(`Mistral Chat API error: ${response.status} ${response.statusText}`);
+    }
+
+    let data;
+    try {
+      const responseText = await response.text();
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('Failed to parse Chat API response:', parseError);
+      throw new Error('Invalid JSON response from Mistral Chat API');
+    }
+
+    const content = data.choices?.[0]?.message?.content || '{}';
+    try {
+      return JSON.parse(content);
+    } catch (contentParseError) {
+      console.error('Failed to parse structured content:', content);
+      throw new Error('Invalid structured JSON content from Chat API');
     }
   }
 
@@ -162,16 +302,19 @@ export class MistralOCRService {
   }
 
   /**
-   * Build extraction prompt for Mistral OCR
+   * Build structuring prompt for extracted text
    */
-  private buildExtractionPrompt(options: OCRProcessingOptions): string {
+  private buildStructuringPrompt(extractedText: string, options: OCRProcessingOptions): string {
     const detail = options.extractionDetail || 'comprehensive';
 
-    return `Extract structured information from this CV/resume document.
+    return `You are an expert CV/resume parser. Structure the following extracted CV text into a standardized JSON format.
+
+EXTRACTED CV TEXT:
+${extractedText}
 
 ${options.targetRole ? `Target Role: ${options.targetRole}` : ''}
 
-Extract ALL information in a structured JSON format with these exact fields:
+Structure this information into the following exact JSON format:
 
 {
   "personalInfo": {
@@ -222,8 +365,67 @@ Extract ALL information in a structured JSON format with these exact fields:
 }
 
 Be ${detail === 'comprehensive' ? 'extremely thorough' : 'focused on key information'}.
-Extract ALL text content accurately. Use null for missing fields, empty arrays for missing lists.
-Calculate yearsOfExperience from work history if not explicitly stated.`;
+Parse ALL text content accurately. Use null for missing fields, empty arrays for missing lists.
+Calculate yearsOfExperience from work history if not explicitly stated.
+Return only valid JSON, no markdown or explanations.`;
+  }
+
+  /**
+   * Create minimal structure when OCR fails completely
+   */
+  private createMinimalStructure(extractedText?: string): any {
+    return {
+      personalInfo: {
+        fullName: extractedText ? 'Extracted from CV' : 'Unknown Name'
+      },
+      summary: {},
+      experience: [],
+      education: [],
+      skills: {
+        technical: extractedText ? [extractedText.slice(0, 50) + '...'] : []
+      }
+    };
+  }
+
+  /**
+   * Create completely safe analysis when all else fails
+   */
+  private createSafeAnalysis(mimeType: string): CVAnalysis {
+    return {
+      personalInfo: {
+        fullName: 'CV Upload',
+        email: null,
+        phone: null,
+        location: null,
+        linkedIn: null,
+        github: null,
+        portfolio: null
+      },
+      summary: {
+        headline: null,
+        summary: null,
+        yearsOfExperience: null,
+        currentRole: null,
+        targetRole: null
+      },
+      experience: [],
+      education: [],
+      skills: {
+        technical: [],
+        soft: [],
+        languages: [],
+        frameworks: [],
+        tools: []
+      },
+      metadata: {
+        extractionDate: new Date().toISOString(),
+        documentType: mimeType.includes('pdf') ? 'PDF' : 'Image',
+        pageCount: null,
+        confidence: 0.05,
+        warnings: ['Complete extraction failure - fallback used'],
+        processingModel: 'fallback'
+      }
+    };
   }
 
   /**

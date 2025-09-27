@@ -1,10 +1,17 @@
 // LLM Provider Service - Multi-provider abstraction with intelligent fallback
-// Supports Gemini, OpenAI, Anthropic, Grok with unified interface
+// Supports Gemini, OpenAI, Anthropic with LangChain structured outputs
+// Uses LangChain's withStructuredOutput internally for OOTB, battle-tested implementation
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { LLMConfig, ModelConfig, getOptimalProvider, calculateEstimatedCost } from '../config/llm-config';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
+
+// LangChain imports for structured outputs
+import { z } from 'zod';
+import { ChatOpenAI } from '@langchain/openai';
+import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
+import { ChatAnthropic } from '@langchain/anthropic';
 
 // Provider-specific model mappings
 const PROVIDER_MODEL_MAP = {
@@ -19,8 +26,8 @@ const PROVIDER_MODEL_MAP = {
     default: 'gpt-4.1-mini',
   },
   anthropic: {
-    // Single Claude model for all tasks
-    default: 'claude-sonnet-3.5',
+    // Single Claude model for all tasks - using Claude Sonnet 4 with correct model name
+    default: 'claude-sonnet-4-20250514',
   },
   grok: {
     // Grok model when available
@@ -45,11 +52,13 @@ export interface GenerationOptions {
   retryCount?: number;
 }
 
-// OOTB Structured Output Integration - TDD Implementation
-import { z } from 'zod';
-import { ChatOpenAI } from '@langchain/openai';
-import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
-import { ChatAnthropic } from '@langchain/anthropic';
+// Provider availability tracking
+interface ProviderAvailability {
+  available: boolean;
+  reason?: string;
+  client?: any;
+  langchainModel?: any;
+}
 
 export interface StructuredGenerationOptions {
   systemPrompt?: string;
@@ -79,6 +88,7 @@ export interface ProviderStats {
 export class LLMProviderService {
   private config: LLMConfig;
   private providers: Map<string, any>;
+  private langchainProviders: Map<string, ProviderAvailability>;
   private stats: Map<string, ProviderStats>;
   private cache: Map<string, { result: GenerationResult; expiresAt: number }>;
   private rateLimiter: Map<string, { count: number; windowStart: number }>;
@@ -86,41 +96,130 @@ export class LLMProviderService {
   constructor(config: LLMConfig) {
     this.config = config;
     this.providers = new Map();
+    this.langchainProviders = new Map();
     this.stats = new Map();
     this.cache = new Map();
     this.rateLimiter = new Map();
 
     this.initializeProviders();
+    this.initializeLangChainProviders();
     this.initializeStats();
   }
 
   private initializeProviders(): void {
     // Initialize Gemini (primary)
     if (process.env.GOOGLE_AI_API_KEY) {
-      this.providers.set('gemini', new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY));
+      try {
+        this.providers.set('gemini', new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY));
+        console.log('✅ Gemini provider initialized');
+      } catch (error) {
+        console.warn('❌ Gemini provider initialization failed:', error.message);
+      }
     }
 
     // Initialize OpenAI (fallback)
     if (process.env.OPENAI_API_KEY) {
-      this.providers.set('openai', new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
-        maxRetries: 0 // We handle retries ourselves
-      }));
+      try {
+        this.providers.set('openai', new OpenAI({
+          apiKey: process.env.OPENAI_API_KEY,
+          maxRetries: 0 // We handle retries ourselves
+        }));
+        console.log('✅ OpenAI provider initialized');
+      } catch (error) {
+        console.warn('❌ OpenAI provider initialization failed:', error.message);
+      }
     }
 
     // Initialize Anthropic (fallback)
     if (process.env.ANTHROPIC_API_KEY) {
-      this.providers.set('anthropic', new Anthropic({
-        apiKey: process.env.ANTHROPIC_API_KEY
-      }));
+      try {
+        this.providers.set('anthropic', new Anthropic({
+          apiKey: process.env.ANTHROPIC_API_KEY
+        }));
+        console.log('✅ Anthropic provider initialized');
+      } catch (error) {
+        console.warn('❌ Anthropic provider initialization failed:', error.message);
+      }
     }
 
     // Initialize Grok (when available)
     if (process.env.GROK_API_KEY) {
-      console.log('Grok provider configured (implementation pending)');
+      console.log('⏳ Grok provider configured (implementation pending)');
     }
 
-    console.log(`✅ Initialized providers: ${Array.from(this.providers.keys()).join(', ')}`);
+    const availableProviders = Array.from(this.providers.keys());
+    if (availableProviders.length === 0) {
+      console.warn('⚠️ No LLM providers initialized! Check your API keys.');
+    } else {
+      console.log(`✅ Available providers: ${availableProviders.join(', ')}`);
+    }
+  }
+
+  private initializeLangChainProviders(): void {
+    // Initialize LangChain models for structured outputs
+    const providerConfigs = [
+      {
+        name: 'gemini',
+        apiKey: process.env.GOOGLE_AI_API_KEY,
+        createModel: (task: string) => new ChatGoogleGenerativeAI({
+          model: getProviderModel('gemini', task),
+          temperature: 0,
+          apiKey: process.env.GOOGLE_AI_API_KEY,
+          maxRetries: 3
+        })
+      },
+      {
+        name: 'openai',
+        apiKey: process.env.OPENAI_API_KEY,
+        createModel: (task: string) => new ChatOpenAI({
+          model: getProviderModel('openai', task),
+          temperature: 0,
+          apiKey: process.env.OPENAI_API_KEY,
+          maxRetries: 3
+        })
+      },
+      {
+        name: 'anthropic',
+        apiKey: process.env.ANTHROPIC_API_KEY,
+        createModel: (task: string) => new ChatAnthropic({
+          model: getProviderModel('anthropic', task),
+          temperature: 0,
+          anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+          maxRetries: 3
+        })
+      }
+    ];
+
+    for (const config of providerConfigs) {
+      if (config.apiKey) {
+        try {
+          // Test model creation
+          const testModel = config.createModel('default');
+          this.langchainProviders.set(config.name, {
+            available: true,
+            langchainModel: config.createModel
+          });
+          console.log(`✅ LangChain ${config.name} provider ready for structured outputs`);
+        } catch (error) {
+          this.langchainProviders.set(config.name, {
+            available: false,
+            reason: `Initialization failed: ${error.message}`
+          });
+          console.warn(`❌ LangChain ${config.name} provider failed:`, error.message);
+        }
+      } else {
+        this.langchainProviders.set(config.name, {
+          available: false,
+          reason: 'API key not configured'
+        });
+      }
+    }
+
+    const availableLangChain = Array.from(this.langchainProviders.entries())
+      .filter(([_, provider]) => provider.available)
+      .map(([name]) => name);
+
+    console.log(`🔗 LangChain providers available: ${availableLangChain.join(', ') || 'none'}`);
   }
 
   private initializeStats(): void {
@@ -216,7 +315,8 @@ export class LLMProviderService {
 
   /**
    * OOTB Structured Output Generation - KISS/DRY/OOTB with LangChain
-   * Uses each provider's native structured output capabilities
+   * Uses LangChain's withStructuredOutput internally with intelligent fallbacks
+   * Based on LangChain best practices from official documentation
    */
   async generateStructured<T>(
     schema: z.ZodSchema<T>,
@@ -224,71 +324,121 @@ export class LLMProviderService {
     prompt: string,
     options: StructuredGenerationOptions = {}
   ): Promise<T> {
-    const modelConfig = this.config.models[task];
-    const provider = getOptimalProvider(task, this.config);
+    // Get ordered list of providers to try (optimal first, then fallbacks)
+    const providerOrder = this.getAvailableProviderOrder(task);
 
-    try {
-      // Create LangChain model based on optimal provider
-      let llmModel;
-
-      switch (provider) {
-        case 'openai':
-          if (!process.env.OPENAI_API_KEY) throw new Error('OpenAI API key not configured');
-          llmModel = new ChatOpenAI({
-            model: getProviderModel('openai', task),
-            temperature: options.temperature ?? 0,
-            apiKey: process.env.OPENAI_API_KEY,
-            maxRetries: options.maxRetries ?? 3
-          });
-          break;
-
-        case 'gemini':
-          if (!process.env.GOOGLE_AI_API_KEY) throw new Error('Gemini API key not configured');
-          llmModel = new ChatGoogleGenerativeAI({
-            model: getProviderModel('gemini', task),
-            temperature: options.temperature ?? 0,
-            apiKey: process.env.GOOGLE_AI_API_KEY,
-            maxRetries: options.maxRetries ?? 3
-          });
-          break;
-
-        case 'anthropic':
-          if (!process.env.ANTHROPIC_API_KEY) throw new Error('Anthropic API key not configured');
-          llmModel = new ChatAnthropic({
-            model: getProviderModel('anthropic', task),
-            temperature: options.temperature ?? 0,
-            anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-            maxRetries: options.maxRetries ?? 3
-          });
-          break;
-
-        default:
-          throw new Error(`Unsupported provider for structured outputs: ${provider}`);
-      }
-
-      // Create structured model using LangChain's OOTB method
-      const structuredModel = llmModel.withStructuredOutput(schema, {
-        name: `${task}_structured_output`,
-        includeRaw: false // Only return parsed result
-      });
-
-      // Build messages array
-      const messages = [];
-      if (options.systemPrompt) {
-        messages.push(['system', options.systemPrompt]);
-      }
-      messages.push(['human', prompt]);
-
-      // Generate structured output
-      const result = await structuredModel.invoke(messages);
-
-      // Validate result against schema (additional safety)
-      return schema.parse(result);
-
-    } catch (error) {
-      console.error(`Structured output generation failed with ${provider}:`, error);
-      throw new Error(`Structured output failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    if (providerOrder.length === 0) {
+      throw new Error('No LangChain providers available for structured outputs. Check API keys.');
     }
+
+    let lastError: Error | null = null;
+
+    // Try providers in order until one succeeds
+    for (const providerName of providerOrder) {
+      try {
+        console.log(`🔄 Attempting structured output with ${providerName}...`);
+
+        const result = await this.executeStructuredGeneration(
+          providerName,
+          schema,
+          task,
+          prompt,
+          options
+        );
+
+        console.log(`✅ Structured output successful with ${providerName}`);
+        return result;
+
+      } catch (error) {
+        lastError = error as Error;
+        console.warn(`❌ ${providerName} failed for structured output:`, error.message);
+
+        // If this is the last provider, we'll throw after the loop
+        if (providerName === providerOrder[providerOrder.length - 1]) {
+          break;
+        }
+
+        // Wait before trying next provider
+        await this.sleep(this.config.retryDelayMs);
+      }
+    }
+
+    // All providers failed
+    const availableProviders = providerOrder.join(', ');
+    throw new Error(
+      `All available providers failed for structured output (tried: ${availableProviders}). ` +
+      `Last error: ${lastError?.message}. Check API keys and provider configurations.`
+    );
+  }
+
+  /**
+   * Execute structured generation with a specific provider
+   * Handles provider-specific schema requirements and configurations
+   */
+  private async executeStructuredGeneration<T>(
+    providerName: string,
+    schema: z.ZodSchema<T>,
+    task: keyof LLMConfig['models'],
+    prompt: string,
+    options: StructuredGenerationOptions
+  ): Promise<T> {
+    const provider = this.langchainProviders.get(providerName);
+
+    if (!provider || !provider.available || !provider.langchainModel) {
+      throw new Error(`Provider ${providerName} not available: ${provider?.reason || 'unknown'}`);
+    }
+
+    // Create LangChain model instance
+    const llmModel = provider.langchainModel(task);
+
+    // Configure temperature if provided
+    if (options.temperature !== undefined) {
+      llmModel.temperature = options.temperature;
+    }
+
+    // Create structured model using LangChain's OOTB method
+    // Following best practices: https://python.langchain.com/docs/how_to/structured_output/
+    const structuredModel = llmModel.withStructuredOutput(schema, {
+      name: `${task}_structured_output`,
+      includeRaw: false // Only return parsed result for clean interface
+    });
+
+    // Build messages array following LangChain format
+    const messages = [];
+    if (options.systemPrompt) {
+      messages.push(['system', options.systemPrompt]);
+    }
+    messages.push(['human', prompt]);
+
+    // Generate structured output
+    const result = await structuredModel.invoke(messages);
+
+    // Additional validation to ensure type safety
+    return schema.parse(result);
+  }
+
+  /**
+   * Get ordered list of available providers for structured outputs
+   * Prioritizes optimal provider for task, then available fallbacks
+   */
+  private getAvailableProviderOrder(task: keyof LLMConfig['models']): string[] {
+    // Start with optimal provider for this task
+    const optimalProvider = getOptimalProvider(task, this.config);
+    const fallbackProviders = this.config.fallbackProviders;
+
+    // Build ordered list: optimal first, then fallbacks
+    let providerOrder = [optimalProvider, ...fallbackProviders];
+
+    // Remove duplicates while preserving order
+    providerOrder = [...new Set(providerOrder)];
+
+    // Filter to only available LangChain providers
+    const availableProviders = providerOrder.filter(provider => {
+      const langchainProvider = this.langchainProviders.get(provider);
+      return langchainProvider && langchainProvider.available;
+    });
+
+    return availableProviders;
   }
 
   private async callProvider(
@@ -513,5 +663,83 @@ export class LLMProviderService {
    */
   getConfig(): LLMConfig {
     return { ...this.config };
+  }
+
+  /**
+   * Get provider availability status for debugging
+   */
+  getProviderAvailability(): Record<string, ProviderAvailability> {
+    const result: Record<string, ProviderAvailability> = {};
+    for (const [provider, availability] of this.langchainProviders.entries()) {
+      result[provider] = {
+        available: availability.available,
+        reason: availability.reason
+      };
+    }
+    return result;
+  }
+
+  /**
+   * Test structured output generation in isolation
+   * Useful for debugging and validation
+   */
+  async testStructuredOutput(): Promise<{
+    success: boolean;
+    results: Array<{ provider: string; success: boolean; error?: string; result?: any }>;
+  }> {
+    console.log('🧪 Testing structured output generation...');
+
+    // Simple test schema
+    const TestSchema = z.object({
+      message: z.string().describe('A simple test message'),
+      success: z.boolean().describe('Whether the test was successful'),
+      timestamp: z.string().describe('ISO timestamp')
+    });
+
+    const testPrompt = 'Generate a test response confirming structured output works with current timestamp';
+    const results = [];
+    let overallSuccess = false;
+
+    // Test each available provider
+    for (const [providerName, provider] of this.langchainProviders.entries()) {
+      if (!provider.available) {
+        results.push({
+          provider: providerName,
+          success: false,
+          error: provider.reason || 'Provider not available'
+        });
+        continue;
+      }
+
+      try {
+        console.log(`Testing ${providerName}...`);
+        const result = await this.executeStructuredGeneration(
+          providerName,
+          TestSchema,
+          'quality_evaluation', // Use a simple task
+          testPrompt,
+          { systemPrompt: 'You are a helpful assistant testing structured outputs.' }
+        );
+
+        results.push({
+          provider: providerName,
+          success: true,
+          result
+        });
+        overallSuccess = true;
+        console.log(`✅ ${providerName} test passed:`, result);
+
+      } catch (error) {
+        results.push({
+          provider: providerName,
+          success: false,
+          error: error.message
+        });
+        console.log(`❌ ${providerName} test failed:`, error.message);
+      }
+    }
+
+    console.log(`🧪 Test complete. Overall success: ${overallSuccess}`);
+    return { success: overallSuccess, results };
   }
 }

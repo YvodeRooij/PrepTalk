@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useRef } from 'react';
-import { createClientComponentClient } from '@supabase/auth-helpers-nextjs';
+import { createClient } from '@/lib/supabase/client';
 import { CVAnalysis } from '@/lib/schemas/cv-analysis';
 
 interface CVUploadProps {
@@ -19,7 +19,7 @@ export function CVUpload({ userId, onUploadComplete, onUploadError, className }:
   const [error, setError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const supabase = createClientComponentClient();
+  const supabase = createClient();
 
   const handleFile = async (file: File) => {
     // Validate file type
@@ -84,31 +84,6 @@ export function CVUpload({ userId, onUploadComplete, onUploadError, className }:
 
       const analysis: CVAnalysis = await response.json();
       setUploadProgress(100);
-
-      // Step 4: Update user profile with CV URL and extracted data
-      const { error: updateError } = await supabase
-        .from('user_profiles')
-        .update({
-          resume_url: publicUrl,
-          full_name: analysis.personalInfo.fullName,
-          current_job_role: analysis.summary.currentRole,
-          target_role: analysis.summary.targetRole,
-          experience_level: analysis.metadata.extractionDate ? 'mid' : 'entry',
-          years_of_experience: analysis.summary.yearsOfExperience,
-          headline: analysis.summary.headline,
-          bio: analysis.summary.summary,
-          location: analysis.personalInfo.location,
-          linkedin_url: analysis.personalInfo.linkedIn,
-          github_url: analysis.personalInfo.github,
-          portfolio_url: analysis.personalInfo.portfolio,
-          metadata: {
-            cvAnalysis: analysis,
-            lastAnalyzed: new Date().toISOString()
-          }
-        })
-        .eq('user_id', userId);
-
-      if (updateError) throw updateError;
 
       setCvAnalysis(analysis);
       onUploadComplete?.(analysis);

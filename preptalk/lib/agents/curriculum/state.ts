@@ -55,6 +55,17 @@ export const CurriculumStateAnnotation = Annotation.Root({
     default: () => null,
   }),
 
+  // Unified Context Engine Output - Synthesis of all 3 inputs
+  unifiedContext: Annotation<{
+    strengthAmplifiers: string[];
+    gapBridges: string[];
+    confidenceBuilders: string[];
+    ciIntegrationStrategy: string;
+    personalizedApproach: string;
+  } | null>({
+    default: () => null,
+  }),
+
   // Discovery Phase
   discoveredSources: Annotation<Array<{
     url: string;

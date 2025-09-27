@@ -162,7 +162,7 @@ Current job context:
 - Location: ${job.location ?? 'unspecified'}
 - Work arrangement: ${job.work_arrangement ?? 'unspecified'}
 - Key requirements: ${job.required_skills?.join(', ') || 'None listed'}
-${company ? `- Known company info: ${company.name}, values: ${company.values?.join(', ') || 'None listed'}` : ''}
+${company ? `- Known company info: ${company.name}, values: ${Array.isArray(company.values) ? company.values.join(', ') : (company.values || 'None listed')}` : ''}
 
 Based on your research findings, return ONLY a valid JSON object with both basic and competitive intelligence:
 {

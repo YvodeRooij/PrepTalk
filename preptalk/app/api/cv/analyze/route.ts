@@ -2,8 +2,7 @@
 // Processes uploaded CVs and extracts structured data
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';
-import { cookies } from 'next/headers';
+import { createClient } from '@/lib/supabase/server';
 import { MistralOCRService } from '@/lib/services/mistral-ocr';
 import { CVAnalysisSchema, CVInsightsSchema } from '@/lib/schemas/cv-analysis';
 
@@ -23,7 +22,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify user authentication
-    const supabase = createRouteHandlerClient({ cookies });
+    const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
 
     if (authError || !user || user.id !== userId) {
@@ -68,7 +67,35 @@ export async function POST(request: NextRequest) {
       // Continue without insights
     }
 
-    // Store analysis results in database
+    // 🚀 FIX: Create CV analysis record in cv_analyses table
+    const { data: cvAnalysisRecord, error: cvAnalysisError } = await supabase
+      .from('cv_analyses')
+      .insert({
+        user_id: userId,
+        file_path: fileUrl || `uploads/${userId}/${file.name}`,
+        file_name: file.name,
+        mime_type: file.type,
+        file_size: file.size,
+        analysis: validatedAnalysis,
+        insights: insights,
+        match_score: validatedAnalysis.metadata.confidence,
+        processing_model: 'mistral-large-2407',
+        processing_status: 'completed',
+        processed_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .select('id')
+      .single();
+
+    if (cvAnalysisError) {
+      console.error('Failed to create CV analysis record:', cvAnalysisError);
+      // Continue without cv_analysis_id - don't fail the entire operation
+    }
+
+    const cvAnalysisId = cvAnalysisRecord?.id;
+
+    // Store analysis results in user profile (keep existing functionality)
     const { error: updateError } = await supabase
       .from('user_profiles')
       .update({
@@ -87,6 +114,7 @@ export async function POST(request: NextRequest) {
         metadata: {
           cvAnalysis: validatedAnalysis,
           cvInsights: insights,
+          cvAnalysisId: cvAnalysisId, // 🔗 Link to cv_analyses record
           lastAnalyzed: new Date().toISOString(),
           extractionConfidence: validatedAnalysis.metadata.confidence
         },
@@ -111,6 +139,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ...validatedAnalysis,
       insights,
+      cv_analysis_id: cvAnalysisId, // 🔗 Include CV analysis ID for curriculum linking
       message: 'CV analyzed successfully'
     });
 

@@ -230,7 +230,21 @@ export async function mergeResearch(
     { format: 'json' }
   );
 
-  const companyContext = JSON.parse(result.content);
+  let companyContext;
+  try {
+    companyContext = JSON.parse(result.content);
+  } catch (error) {
+    console.warn('Failed to parse company context JSON, using fallback:', error.message);
+    console.warn('Raw content:', result.content);
+    // Fallback to basic structure if JSON parsing fails
+    companyContext = {
+      name: 'Unknown Company',
+      values: ['Innovation', 'Excellence', 'Trust'],
+      industry: 'Technology',
+      size: 'Large',
+      headquarters: 'Unknown'
+    };
+  }
 
   return {
     companyContext: {

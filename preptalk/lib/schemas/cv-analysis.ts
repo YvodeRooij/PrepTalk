@@ -3,73 +3,73 @@
 
 import { z } from 'zod';
 
-// Work Experience Schema
+// Work Experience Schema - Flexible and forgiving
 export const WorkExperienceSchema = z.object({
-  company: z.string().describe('Company name'),
-  position: z.string().describe('Job title/position'),
-  startDate: z.string().optional().describe('Start date (any format)'),
-  endDate: z.string().optional().describe('End date or "Present"'),
-  duration: z.string().optional().describe('Duration in years/months'),
-  location: z.string().optional().describe('Work location'),
-  responsibilities: z.array(z.string()).describe('Key responsibilities and achievements'),
-  skills: z.array(z.string()).optional().describe('Skills used in this role')
+  company: z.string().default('Unknown Company').describe('Company name'),
+  position: z.string().default('Unknown Position').describe('Job title/position'),
+  startDate: z.string().nullish().describe('Start date (any format)'),
+  endDate: z.string().nullish().describe('End date or "Present"'),
+  duration: z.string().nullish().describe('Duration in years/months'),
+  location: z.string().nullish().describe('Work location'),
+  responsibilities: z.array(z.string()).default([]).describe('Key responsibilities and achievements'),
+  skills: z.array(z.string()).default([]).describe('Skills used in this role')
 });
 
-// Education Schema
+// Education Schema - Flexible and forgiving
 export const EducationSchema = z.object({
-  institution: z.string().describe('School/University name'),
-  degree: z.string().optional().describe('Degree type (BS, MS, PhD, etc)'),
-  field: z.string().optional().describe('Field of study/major'),
-  graduationDate: z.string().optional().describe('Graduation date'),
-  gpa: z.string().optional().describe('GPA if mentioned'),
-  achievements: z.array(z.string()).optional().describe('Academic achievements')
+  institution: z.string().default('Unknown Institution').describe('School/University name'),
+  degree: z.string().nullish().describe('Degree type (BS, MS, PhD, etc)'),
+  field: z.string().nullish().describe('Field of study/major'),
+  graduationDate: z.string().nullish().describe('Graduation date'),
+  gpa: z.string().nullish().describe('GPA if mentioned'),
+  achievements: z.array(z.string()).default([]).describe('Academic achievements')
 });
 
 // Complete CV Analysis Schema
 export const CVAnalysisSchema = z.object({
-  // Basic Information
+  // Basic Information - Flexible and forgiving
   personalInfo: z.object({
-    fullName: z.string().describe('Full name'),
-    email: z.string().optional().describe('Email address'),
-    phone: z.string().optional().describe('Phone number'),
-    location: z.string().optional().describe('Location/City'),
-    linkedIn: z.string().optional().describe('LinkedIn URL'),
-    github: z.string().optional().describe('GitHub URL'),
-    portfolio: z.string().optional().describe('Portfolio/Website URL')
+    fullName: z.string().default('Unknown Name').describe('Full name'),
+    email: z.string().nullish().describe('Email address'),
+    phone: z.string().nullish().describe('Phone number'),
+    location: z.string().nullish().describe('Location/City'),
+    linkedIn: z.string().nullish().describe('LinkedIn URL'),
+    github: z.string().nullish().describe('GitHub URL'),
+    portfolio: z.string().nullish().describe('Portfolio/Website URL')
   }).describe('Personal contact information'),
 
-  // Professional Summary
+  // Professional Summary - Flexible and forgiving
   summary: z.object({
-    headline: z.string().optional().describe('Professional headline/title'),
-    summary: z.string().optional().describe('Professional summary/objective'),
-    yearsOfExperience: z.number().optional().describe('Total years of experience'),
-    currentRole: z.string().optional().describe('Current job title'),
-    targetRole: z.string().optional().describe('Target/desired role if mentioned')
+    headline: z.string().nullish().describe('Professional headline/title'),
+    summary: z.string().nullish().describe('Professional summary/objective'),
+    yearsOfExperience: z.number().nullish().describe('Total years of experience'),
+    currentRole: z.string().nullish().describe('Current job title'),
+    targetRole: z.string().nullish().describe('Target/desired role if mentioned')
   }).describe('Professional summary'),
 
-  // Experience
-  experience: z.array(WorkExperienceSchema).describe('Work experience history'),
+  // Experience - Always an array, empty if none found
+  experience: z.array(WorkExperienceSchema).default([]).describe('Work experience history'),
 
-  // Education
-  education: z.array(EducationSchema).describe('Educational background'),
+  // Education - Always an array, empty if none found
+  education: z.array(EducationSchema).default([]).describe('Educational background'),
 
-  // Skills
+  // Skills - Flexible with defaults
   skills: z.object({
-    technical: z.array(z.string()).describe('Technical skills'),
-    soft: z.array(z.string()).describe('Soft skills'),
-    languages: z.array(z.string()).optional().describe('Programming languages'),
-    frameworks: z.array(z.string()).optional().describe('Frameworks and libraries'),
-    tools: z.array(z.string()).optional().describe('Tools and platforms')
+    technical: z.array(z.string()).default([]).describe('Technical skills'),
+    soft: z.array(z.string()).default([]).describe('Soft skills'),
+    languages: z.array(z.string()).default([]).describe('Programming languages'),
+    frameworks: z.array(z.string()).default([]).describe('Frameworks and libraries'),
+    tools: z.array(z.string()).default([]).describe('Tools and platforms')
   }).describe('Skills breakdown'),
 
-  // Analysis Metadata
+  // Analysis Metadata - Flexible with sensible defaults
   metadata: z.object({
-    extractionDate: z.string().describe('When CV was analyzed'),
-    documentType: z.string().describe('PDF, DOCX, Image, etc'),
-    pageCount: z.number().optional().describe('Number of pages'),
-    confidence: z.number().min(0).max(1).describe('Overall extraction confidence'),
-    warnings: z.array(z.string()).optional().describe('Any extraction warnings'),
-    processingModel: z.string().describe('Model used for extraction')
+    extractionDate: z.string().default(() => new Date().toISOString()).describe('When CV was analyzed'),
+    documentType: z.string().default('Unknown').describe('PDF, DOCX, Image, etc'),
+    pageCount: z.number().nullish().describe('Number of pages'),
+    confidence: z.number().min(0).max(1).default(0.5).describe('Overall extraction confidence'),
+    warnings: z.array(z.string()).default([]).describe('Any extraction warnings'),
+    processingModel: z.string().default('unknown').describe('Model used for extraction')
   }).describe('Extraction metadata')
 });
 

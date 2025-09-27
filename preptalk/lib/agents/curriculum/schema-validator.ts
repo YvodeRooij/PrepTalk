@@ -14,7 +14,7 @@ export const EXPECTED_SCHEMA = {
       'overview',
       'total_rounds',
       'structure',
-      'quality_score',
+      'completeness_score',
       'generation_model',
       'created_at'
     ],
@@ -24,7 +24,15 @@ export const EXPECTED_SCHEMA = {
       'parent_curriculum_id',
       'generation_params',
       'difficulty_level',
-      'updated_at'
+      'updated_at',
+      // NEW: Comprehensive data storage columns
+      'cv_analysis_id',
+      'unified_context',
+      'user_personalization',
+      'discovery_metadata',
+      'cv_integration',
+      'generation_metadata',
+      'role_intelligence'
     ],
     column_types: {
       id: 'uuid',
@@ -33,9 +41,17 @@ export const EXPECTED_SCHEMA = {
       overview: 'text',
       total_rounds: 'integer',
       structure: 'jsonb',
-      quality_score: 'numeric',
+      completeness_score: 'numeric',
       generation_model: 'text',
-      created_at: 'timestamptz'
+      created_at: 'timestamptz',
+      // NEW: Comprehensive data storage column types
+      cv_analysis_id: 'uuid',
+      unified_context: 'jsonb',
+      user_personalization: 'jsonb',
+      discovery_metadata: 'jsonb',
+      cv_integration: 'jsonb',
+      generation_metadata: 'jsonb',
+      role_intelligence: 'jsonb'
     }
   },
   curriculum_rounds: {

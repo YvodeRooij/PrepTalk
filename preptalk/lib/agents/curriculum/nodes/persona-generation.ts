@@ -287,11 +287,14 @@ export async function generateDynamicPersonas(
   for (let i = 0; i < roundTypes.length; i++) {
     const roundType = roundTypes[i];
 
+    // Build enhanced prompt with unified context
+    const unifiedContextPrompt = buildUnifiedContextPrompt(state.unifiedContext);
+
     const personaPrompt = `Generate a realistic interviewer persona for ${jobData.company_name}'s ${roundType.replace('_', ' ')} interview round.
 
 COMPANY CONTEXT:
 - Company: ${companyContext.name}
-- Values: ${companyContext.values.join(', ')}
+- Values: ${Array.isArray(companyContext.values) ? companyContext.values.join(', ') : (companyContext.values || 'Innovation, Excellence, Trust')}
 - Recent developments: ${competitiveIntelligence.recentDevelopments.slice(0, 2).join(', ')}
 
 COMPETITIVE INTELLIGENCE:
@@ -305,6 +308,8 @@ JOB DETAILS:
 - Company: ${jobData.company_name}
 
 ${getUserPersonalizationContext(state.userProfile, state.cvData)}
+
+${unifiedContextPrompt}
 
 Create a realistic persona who:
 1. Works at ${jobData.company_name} and understands these competitive advantages
@@ -421,9 +426,14 @@ export async function generateStandardQuestions(
     const personalizationContext = buildPersonalizationContext(state.userProfile, state.cvData, persona.round_type);
     const adaptationStrategy = getAdaptationStrategy(state.userProfile, state.cvData, persona.round_type);
 
-    const questionsPrompt = `Generate 6 standard interview questions for a ${persona.round_type.replace('_', ' ')} interview round.
+    // Build unified context-aware prompt
+    const unifiedContextPrompt = buildUnifiedContextPrompt(state.unifiedContext);
+
+    const questionsPrompt = `Generate 10 comprehensive interview questions for a ${persona.round_type.replace('_', ' ')} interview round.
 
 ${personalizationContext}${adaptationStrategy}
+
+${unifiedContextPrompt}
 
 INTERVIEWER CONTEXT:
 - Name: ${persona.identity.name}
@@ -440,27 +450,30 @@ Generate questions that:
 1. Are standard questions any interviewer at any company might ask
 2. ${state.userProfile ? 'Address the candidate\'s specific practice areas and background constructively' : 'Are universally applicable'}
 3. Can be answered well by candidates who understand the competitive context
-4. Have natural follow-up questions that ${state.userProfile ? 'create opportunities to showcase transferable skills' : 'explore depth'}
+4. Have detailed follow-up question trees (3-4 follow-ups each) that ${state.userProfile ? 'create opportunities to showcase transferable skills' : 'explore depth'}
 5. Are appropriate for a ${persona.round_type.replace('_', ' ')} round
+6. Create natural opportunities to use the unified context coaching strategy
 
 Return ONLY a JSON array with this structure:
 [
   {
     "text": "Question text here?",
     "category": "motivation|behavioral|cultural|strategic",
-    "follow_ups": ["Follow up question 1?", "Follow up question 2?"],
+    "follow_ups": ["Follow up question 1?", "Follow up question 2?", "Follow up question 3?", "Deeper dive question?"],
     "time_allocation_minutes": 4
   }
 ]`;
 
     try {
-      // OOTB Structured Output for Questions
-      const QuestionsArraySchema = z.array(z.object({
-        text: z.string().min(10).describe('The interview question text'),
-        category: z.enum(['motivation', 'behavioral', 'cultural', 'strategic']).describe('Question category'),
-        follow_ups: z.array(z.string()).max(3).describe('Follow-up questions'),
-        time_allocation_minutes: z.number().int().min(2).max(10).describe('Recommended time allocation')
-      })).min(4).max(8).describe('Array of interview questions');
+      // OOTB Structured Output for Questions - OpenAI-compatible object wrapper
+      const QuestionsArraySchema = z.object({
+        questions: z.array(z.object({
+          text: z.string().min(10).describe('The interview question text'),
+          category: z.enum(['motivation', 'behavioral', 'cultural', 'strategic']).describe('Question category'),
+          follow_ups: z.array(z.string()).min(3).max(4).describe('3-4 follow-up questions creating depth'),
+          time_allocation_minutes: z.number().int().min(3).max(8).describe('Recommended time allocation')
+        })).length(10).describe('Exactly 10 comprehensive interview questions')
+      });
 
       const questionsArray = await config.llmProvider?.generateStructured(
         QuestionsArraySchema,
@@ -468,11 +481,11 @@ Return ONLY a JSON array with this structure:
         questionsPrompt
       );
 
-      if (!questionsArray || questionsArray.length === 0) {
+      if (!questionsArray || !questionsArray.questions || questionsArray.questions.length === 0) {
         throw new Error('No questions generated from structured output');
       }
 
-      const questions: StandardQuestion[] = questionsArray.map((q: any, index: number) => ({
+      const questions: StandardQuestion[] = questionsArray.questions.map((q: any, index: number) => ({
         id: `${persona.round_type}-q${index + 1}`,
         text: q.text,
         category: q.category as StandardQuestion['category'],
@@ -569,7 +582,31 @@ Return ONLY a JSON object:
         throw new Error('No response from LLM provider for prep guide');
       }
 
-      const prepData = JSON.parse(prepResponse.content);
+      // Safe JSON parsing with markdown code block handling
+      let prepData;
+      try {
+        // Handle markdown-wrapped JSON first (LLMs commonly wrap JSON in code blocks)
+        const jsonMatch = prepResponse.content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+        if (jsonMatch && jsonMatch[1]) {
+          prepData = JSON.parse(jsonMatch[1].trim());
+          console.log(`✅ Successfully extracted JSON from markdown for ${roundType}`);
+        } else {
+          // Fall back to direct parsing if no markdown blocks found
+          prepData = JSON.parse(prepResponse.content);
+          console.log(`✅ Successfully parsed direct JSON for ${roundType}`);
+        }
+      } catch (error) {
+        console.error(`❌ Failed to parse JSON for ${roundType}:`, error.message);
+        console.error(`Response content (first 200 chars):`, prepResponse.content.substring(0, 200));
+        // Fallback structure
+        prepData = {
+          strategic_advantages_talking_points: [],
+          recent_developments_talking_points: [],
+          great_answers_sound_like: [],
+          company_knowledge_demonstration: []
+        };
+        console.log(`Using fallback structure for ${roundType}`);
+      }
 
       candidatePrepGuides[roundType as NonTechnicalRoundType] = {
         ci_talking_points: {
@@ -721,13 +758,63 @@ function getFallbackQuestions(roundType: NonTechnicalRoundType): StandardQuestio
     recruiter_screen: [
       { text: 'Why are you interested in this role?', category: 'motivation' as const },
       { text: 'What do you know about our company?', category: 'motivation' as const },
-      { text: 'Tell me about your background.', category: 'behavioral' as const }
+      { text: 'Tell me about your background.', category: 'behavioral' as const },
+      { text: 'What attracted you to apply for this position?', category: 'motivation' as const },
+      { text: 'How does this role align with your career goals?', category: 'strategic' as const },
+      { text: 'What are your salary expectations?', category: 'strategic' as const },
+      { text: 'What questions do you have about the company?', category: 'cultural' as const },
+      { text: 'When would you be able to start?', category: 'strategic' as const },
+      { text: 'Tell me about your current role and responsibilities.', category: 'behavioral' as const },
+      { text: 'What motivates you in your work?', category: 'motivation' as const }
     ],
     behavioral_deep_dive: [
       { text: 'Tell me about a challenging project you worked on.', category: 'behavioral' as const },
-      { text: 'Describe a time you had to work with a difficult team member.', category: 'behavioral' as const }
+      { text: 'Describe a time you had to work with a difficult team member.', category: 'behavioral' as const },
+      { text: 'Give me an example of when you had to meet a tight deadline.', category: 'behavioral' as const },
+      { text: 'Tell me about a time you failed at something.', category: 'behavioral' as const },
+      { text: 'Describe a situation where you had to learn something new quickly.', category: 'behavioral' as const },
+      { text: 'Tell me about a time you disagreed with your manager.', category: 'behavioral' as const },
+      { text: 'Give me an example of when you went above and beyond.', category: 'behavioral' as const },
+      { text: 'Describe a time you had to give difficult feedback.', category: 'behavioral' as const },
+      { text: 'Tell me about a time you made a mistake. How did you handle it?', category: 'behavioral' as const },
+      { text: 'Describe a situation where you had to influence someone without authority.', category: 'behavioral' as const }
     ],
-    // Add more fallback questions as needed...
+    culture_values_alignment: [
+      { text: 'What type of work environment brings out your best?', category: 'cultural' as const },
+      { text: 'How do you handle conflict in the workplace?', category: 'cultural' as const },
+      { text: 'What values are most important to you in a workplace?', category: 'cultural' as const },
+      { text: 'Describe your ideal manager and management style.', category: 'cultural' as const },
+      { text: 'How do you prefer to receive feedback?', category: 'cultural' as const },
+      { text: 'What does work-life balance mean to you?', category: 'cultural' as const },
+      { text: 'How do you stay motivated during challenging times?', category: 'cultural' as const },
+      { text: 'What role do you typically play in team settings?', category: 'cultural' as const },
+      { text: 'How do you approach diversity and inclusion in the workplace?', category: 'cultural' as const },
+      { text: 'What attracts you to our company culture specifically?', category: 'cultural' as const }
+    ],
+    strategic_role_discussion: [
+      { text: 'How do you see this role contributing to company success?', category: 'strategic' as const },
+      { text: 'What would you focus on in your first 90 days?', category: 'strategic' as const },
+      { text: 'How do you stay current with industry trends?', category: 'strategic' as const },
+      { text: 'What do you think are the biggest challenges facing our industry?', category: 'strategic' as const },
+      { text: 'How would you measure success in this role?', category: 'strategic' as const },
+      { text: 'What ideas do you have for improving our current processes?', category: 'strategic' as const },
+      { text: 'How do you prioritize competing demands?', category: 'strategic' as const },
+      { text: 'What trends do you think will impact our business?', category: 'strategic' as const },
+      { text: 'How would you approach building relationships with key stakeholders?', category: 'strategic' as const },
+      { text: 'What questions would you ask to better understand our customers?', category: 'strategic' as const }
+    ],
+    executive_final: [
+      { text: 'What is your long-term vision for your career?', category: 'strategic' as const },
+      { text: 'How do you define leadership?', category: 'strategic' as const },
+      { text: 'What would you want to accomplish in this role?', category: 'strategic' as const },
+      { text: 'How do you approach decision-making under uncertainty?', category: 'strategic' as const },
+      { text: 'What questions do you have about our company strategy?', category: 'strategic' as const },
+      { text: 'How would you contribute to our company culture?', category: 'cultural' as const },
+      { text: 'What concerns do you have about this role or company?', category: 'strategic' as const },
+      { text: 'Why should we hire you over other candidates?', category: 'motivation' as const },
+      { text: 'How do you handle high-pressure situations?', category: 'behavioral' as const },
+      { text: 'What would make you successful in this position?', category: 'strategic' as const }
+    ]
   };
 
   const questions = questionSets[roundType] || questionSets.recruiter_screen;
@@ -736,7 +823,12 @@ function getFallbackQuestions(roundType: NonTechnicalRoundType): StandardQuestio
     id: `${roundType}-fallback-q${index + 1}`,
     text: q.text,
     category: q.category,
-    follow_ups: ['Can you tell me more about that?', 'What was the outcome?'],
+    follow_ups: [
+      'Can you tell me more about that?',
+      'What was the outcome?',
+      'How did that experience change your approach?',
+      'What would you do differently next time?'
+    ],
     time_allocation_minutes: 5
   }));
 }
@@ -769,4 +861,32 @@ function getFallbackPrepGuide(
       ]
     }
   };
+}
+
+/**
+ * Build personalized context prompt from unified context engine output
+ */
+function buildUnifiedContextPrompt(unifiedContext: any): string {
+  if (!unifiedContext) return '';
+
+  return `
+PERSONALIZED COACHING STRATEGY (use this to adapt your persona):
+
+STRENGTH AMPLIFIERS - Help candidate showcase these:
+${unifiedContext.strengthAmplifiers?.map((amp: string) => `• ${amp}`).join('\n') || '• Standard professional strengths'}
+
+GAP BRIDGES - Address these positively:
+${unifiedContext.gapBridges?.map((bridge: string) => `• ${bridge}`).join('\n') || '• Standard skill development areas'}
+
+CONFIDENCE BUILDERS - Frame these positively:
+${unifiedContext.confidenceBuilders?.map((builder: string) => `• ${builder}`).join('\n') || '• Growth mindset opportunities'}
+
+CI INTEGRATION STRATEGY:
+${unifiedContext.ciIntegrationStrategy || 'Use competitive intelligence naturally in conversation'}
+
+PERSONALIZED APPROACH:
+${unifiedContext.personalizedApproach || 'Professional and supportive interview style'}
+
+ADAPT YOUR PERSONA: Create a persona that naturally recognizes and encourages these elements during the interview.
+`;
 }

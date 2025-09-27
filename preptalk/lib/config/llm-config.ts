@@ -123,13 +123,22 @@ export const DEFAULT_LLM_CONFIG: LLMConfig = {
       model: 'gpt-4.1-mini',
       temperature: 0.2,
       maxTokens: 1500
+    },
+
+    // Unified context engine: Critical synthesis of all inputs - needs best model
+    unified_context_engine: {
+      provider: 'gemini',
+      model: 'gemini-2.5-pro', // NON-NEGOTIABLE: Using Gemini-2.5-Pro for critical context synthesis
+      temperature: 0.4,
+      maxTokens: 8192, // Large context for synthesizing job + user + CV data
+      timeout: 60000 // Quality > Speed - 60 second timeout
     }
   },
 
   // Mistral OCR configuration for CV analysis
   mistralOCR: {
     enabled: true,
-    model: 'mistral-ocr-2505',
+    model: 'mistral-ocr-latest',
     maxPagesPerRequest: 10,
     costPerPage: 0.001
   },
@@ -247,7 +256,8 @@ export const TASK_PROVIDER_RECOMMENDATIONS = {
   persona_generation: ['anthropic', 'grok', 'openai'], // Creative character creation
   question_generation: ['openai', 'gemini'], // Balanced creativity and structure
   candidate_prep: ['anthropic', 'grok'], // Creative example generation
-  quality_evaluation: ['gemini', 'openai'] // Consistent, objective evaluation
+  quality_evaluation: ['gemini', 'openai'], // Consistent, objective evaluation
+  unified_context_engine: ['gemini', 'anthropic'] // Critical synthesis - needs best context understanding
 } as const;
 
 // Utility functions for config management
