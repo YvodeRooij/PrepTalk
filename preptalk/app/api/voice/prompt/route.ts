@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { creditManager } from '@/lib/credits/manager';
+import { generatePrompt } from '@/lib/voice/prompt-templates';
+import { selectTemplateByRoundType } from '@/lib/voice/template-selector';
 
 // 🧪 A/B TEST SETUP FOR PROMPT LATENCY INVESTIGATION
 //
@@ -111,30 +113,14 @@ export async function POST(request: NextRequest) {
       console.log('🔍 No cv_analysis_id found in curriculum');
     }
 
-    // 🧪 A/B TEST: Long vs Short Prompt for Latency Analysis
-    // Build system prompt using curriculum data
+    // 🎯 TIERED PROMPT SYSTEM: Round-specific prompts with intelligent data distribution
+    // Replaces single massive prompt with round-appropriate templates with intelligent fallbacks
 
-    // LONG PROMPT (currently active - switched back for latency testing)
-    const systemPrompt = buildInterviewPrompt(
-      roundData.interviewer_persona,
-      roundData.topics_to_cover,
-      roundData.candidate_prep_guide,
-      roundData.curricula.role_intelligence,
-      roundData.curricula.unified_context,
-      roundData.curricula.user_personalization,
-      roundData.curricula.cv_integration,
-      roundData.curricula.discovery_metadata,
-      cvAnalysisData // Pass the actual CV analysis data
-    );
+    const selectedTemplate = selectTemplateByRoundType(roundData.round_type, roundNumber);
+    const systemPrompt = generatePrompt(roundData, cvAnalysisData, selectedTemplate);
 
-    // SHORT PROMPT (now commented out after successful latency test)
-    // const systemPrompt = buildShortInterviewPrompt(
-    //   roundData.interviewer_persona,
-    //   cvAnalysisData
-    // );
-
-    console.log('🧪 [A/B TEST] Using LONG prompt version for latency comparison');
-    console.log('🧪 [A/B TEST] Prompt length:', systemPrompt.length, 'characters');
+    console.log('🎯 [TIERED PROMPTS] Using', selectedTemplate, 'template for', roundData.round_type, '(Round', roundNumber + ')');
+    console.log('🎯 [TIERED PROMPTS] Prompt length:', systemPrompt.length, 'characters');
 
     // 🔍 CURRICULUM INTELLIGENCE ANALYSIS - What data do we actually have?
     console.log('🔍 [CURRICULUM DATA] Round-specific data available:');
@@ -177,213 +163,6 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// 🧪 SHORT INTERVIEW PROMPT FOR A/B TESTING (Latency Optimized)
-// Minimal prompt to test if long prompts cause latency issues
-function buildShortInterviewPrompt(
-  persona: any,
-  cvAnalysis?: any
-): string {
-  const candidateName = cvAnalysis?.personalInfo?.fullName || 'candidate';
-  const role = persona?.role || 'interviewer';
-  const experience = cvAnalysis?.summary?.yearsOfExperience || 'some';
-
-  return `You are a ${role} conducting a professional interview. The candidate is ${candidateName} with ${experience} years of experience. Be conversational, ask relevant questions about their background, and help them showcase their strengths. Start with a warm greeting.`;
-}
-
-// 🎭 BUILD INTERVIEW PROMPT FROM CURRICULUM DATA (ORIGINAL - Currently commented out for A/B testing)
-// Enhanced version with layered context for natural conversation flow
-function buildInterviewPrompt(
-  persona: any,
-  questions: any[],
-  prepGuide: any,
-  roleIntelligence: any,
-  unifiedContext: any,
-  userPersonalization: any,
-  cvIntegration?: any,
-  discoveryMetadata?: any,
-  cvAnalysis?: any
-): string {
-
-
-  const systemPrompt = `PERSONALITY: You are an experienced ${persona?.role || 'interviewer'} with ${persona?.tenure_years || 3} years in this role. Your personality traits: ${persona?.personality_traits?.join(', ') || persona?.personality || 'Professional, thoughtful, and encouraging'}. Your communication style: ${persona?.communication_style || 'conversational and supportive'}.
-
-ENVIRONMENT: Professional ${persona?.round_type?.replace('_', ' ') || 'behavioral'} interview setting for a ${persona?.goal || 'role assessment'}.
-
-TONE: ${persona?.communication_style || 'Conversational and supportive'}, naturally informed about the candidate's background, encouraging and professional.
-
-GOAL: Guide this conversation to help the candidate showcase their best qualities for this specific role. Use your knowledge of their background to ask relevant, targeted questions that demonstrate your awareness without explicitly mentioning their CV or resume.
-
-KNOWLEDGE BASE: You are naturally aware that this candidate has:
-${cvAnalysis?.personalInfo?.fullName ? `- Name: ${cvAnalysis.personalInfo.fullName}` : ''}
-${cvAnalysis?.summary?.summary ? `- Background: ${cvAnalysis.summary.summary}` : ''}
-${cvAnalysis?.summary?.currentRole ? `- Current role: ${cvAnalysis.summary.currentRole}` : ''}
-${cvAnalysis?.summary?.yearsOfExperience ? `- Experience: ${cvAnalysis.summary.yearsOfExperience} years` : ''}
-${cvAnalysis?.skills?.technical?.length ? `- Technical skills: ${cvAnalysis.skills.technical.slice(0, 8).join(', ')}` : ''}
-${cvAnalysis?.skills?.soft?.length ? `- Soft skills: ${cvAnalysis.skills.soft.join(', ')}` : ''}
-${cvAnalysis?.experience?.length ? `- Recent companies: ${cvAnalysis.experience.slice(0, 3).map(exp => `${exp.position} at ${exp.company}`).join(', ')}` : ''}
-- Coaching approach needed: ${unifiedContext?.personalizedApproach || 'Professional and supportive guidance'}
-- Ways to build their confidence: ${unifiedContext?.confidenceBuilders?.join(', ') || 'Encourage them to share achievements confidently'}
-- How to help them shine: ${unifiedContext?.strengthAmplifiers?.join(', ') || 'Help them leverage their unique background'}
-
-COMPANY INTELLIGENCE: When they mention the company or role, you can naturally reference:
-${roleIntelligence?.strategic_advantages?.length ? `- Strategic advantages: ${roleIntelligence.strategic_advantages.slice(0, 3).join(', ')}` : ''}
-${roleIntelligence?.recent_role_developments?.length ? `- Recent developments: ${roleIntelligence.recent_role_developments.slice(0, 2).join(', ')}` : ''}
-- Competitive positioning: ${roleIntelligence?.competitive_positioning || 'Strong market position'}
-- Integration strategy: ${unifiedContext?.ciIntegrationStrategy || 'Weave company research naturally into conversation about motivation and fit'}
-
-GUARDRAILS:
-• DO naturally reference their CV/resume when relevant - this is normal in real interviews
-• You can say things like "I see from your CV that you worked at [company]" or "Your background in [field] is interesting"
-• DO ask specific questions about experiences listed on their resume
-• DO acknowledge their background explicitly when it's relevant to the conversation
-• DO guide them toward topics where they can showcase their strengths
-• DO use your knowledge to make the conversation relevant and personalized
-
-CONVERSATION BEHAVIOR:
-• Reference their CV directly when relevant: "I see you worked at [company] - tell me about that experience"
-• Ask specific questions about their listed experiences: "On your resume you mentioned [project] - walk me through that"
-• When they discuss skills → Ask for examples from their actual work history
-• When they seem uncertain → Reference specific achievements from their CV to build confidence
-• When they mention the company → Naturally weave in relevant company intelligence
-• Use their background to ask targeted, relevant questions that help them shine
-
-Begin with a warm greeting and directly reference something from their background that's relevant to this role. For example: "Hi! I've had a chance to review your CV and I'm particularly interested in your experience at [company] - let's start there."`;
-
-  return systemPrompt;
-}
-
-// 🎯 LAYER 1: IMMEDIATE AWARENESS - Always accessible context
-function buildImmediateAwareness(userPersonalization: any, unifiedContext: any): string {
-  const candidateSummary = buildCandidateSummary(userPersonalization);
-  const keyStrengths = extractKeyStrengths(userPersonalization, unifiedContext);
-  const conversationHooks = extractConversationHooks(userPersonalization);
-
-  return `
-CANDIDATE OVERVIEW:
-${candidateSummary}
-
-KEY STRENGTHS TO EXPLORE:
-${keyStrengths}
-
-NATURAL CONVERSATION HOOKS:
-${conversationHooks}
-
-PERSONALIZED APPROACH:
-${unifiedContext?.personalizedApproach || 'Professional and supportive approach tailored to candidate background'}`;
-}
-
-// 🧠 LAYER 2: CONVERSATIONAL MEMORY - Context for specific topics
-function buildConversationalMemory(userPersonalization: any, roleIntelligence: any): string {
-  return `
-WHEN DISCUSSING EXPERIENCE:
-${buildExperienceContext(userPersonalization)}
-
-WHEN DISCUSSING SKILLS:
-${buildSkillsContext(userPersonalization)}
-
-WHEN DISCUSSING COMPANY/ROLE:
-${buildCompanyContext(roleIntelligence)}
-
-WHEN EXPLORING MOTIVATION:
-${buildMotivationContext(userPersonalization, roleIntelligence)}`;
-}
-
-// 💡 LAYER 3: COACHING INTELLIGENCE - Strategic guidance
-function buildCoachingIntelligence(unifiedContext: any, persona: any): string {
-  return `
-STRENGTH AMPLIFICATION OPPORTUNITIES:
-${unifiedContext?.strengthAmplifiers?.map((s: string) => `• ${s}`).join('\n') || '• Help candidate leverage their unique background'}
-
-CONFIDENCE BUILDING STRATEGIES:
-${unifiedContext?.confidenceBuilders?.map((c: string) => `• ${c}`).join('\n') || '• Encourage candidate to share their achievements confidently'}
-
-GAP BRIDGING APPROACH:
-${unifiedContext?.gapBridges?.map((g: string) => `• ${g}`).join('\n') || '• Focus on transferable skills and growth mindset'}
-
-INTERVIEW ADAPTATION:
-Adjust style based on: ${persona?.round_type?.replace('_', ' ') || 'behavioral assessment'} focus and candidate comfort level`;
-}
-
-// 🔄 Natural conversation trigger patterns
-function buildNaturalTriggers(): string {
-  return `
-IF candidate mentions "previous role" → Reference their actual experience naturally
-IF candidate mentions "skills" → Connect to specific technologies/frameworks they've used
-IF candidate mentions "company" → Weave in competitive advantages and recent developments
-IF candidate seems nervous → Use confidence builders and strength-based questions
-IF candidate shows company knowledge → Acknowledge and build on their research
-IF candidate discusses challenges → Connect to role requirements and growth opportunities`;
-}
-
-// Helper functions for building context layers
-function buildCandidateSummary(userPersonalization: any): string {
-  if (!userPersonalization) return "Professional candidate with diverse background";
-
-  const summary = userPersonalization.cv_summary || '';
-  const experience = userPersonalization.relevant_experience?.slice(0, 2)?.join(', ') || '';
-  const currentRole = userPersonalization.current_role || '';
-
-  return `${currentRole ? `Currently: ${currentRole}. ` : ''}${summary}${experience ? ` Recent experience includes: ${experience}.` : ''}`.trim();
-}
-
-function buildExperienceContext(userPersonalization: any): string {
-  if (!userPersonalization?.relevant_experience) return "General professional experience";
-
-  return userPersonalization.relevant_experience
-    .slice(0, 3)
-    .map((exp: string) => `• ${exp}`)
-    .join('\n');
-}
-
-function buildSkillsContext(userPersonalization: any): string {
-  const technical = userPersonalization?.skills_highlighted?.slice(0, 5)?.join(', ') || '';
-  const frameworks = userPersonalization?.frameworks_used?.slice(0, 3)?.join(', ') || '';
-
-  return `Technical: ${technical}${frameworks ? `\nFrameworks: ${frameworks}` : ''}`;
-}
-
-function buildCompanyContext(roleIntelligence: any): string {
-  if (!roleIntelligence) return "Strong company with growth opportunities";
-
-  return `
-Strategic Advantages: ${roleIntelligence.strategic_advantages?.slice(0, 3)?.join(', ') || 'Strong market position'}
-Recent Developments: ${roleIntelligence.recent_role_developments?.slice(0, 2)?.join(', ') || 'Continued growth and innovation'}
-Competitive Position: ${roleIntelligence.competitive_positioning || 'Industry leader with strong culture'}`;
-}
-
-function buildMotivationContext(userPersonalization: any, roleIntelligence: any): string {
-  const userMotivation = userPersonalization?.motivation_factors?.join(', ') || '';
-  const companyFit = roleIntelligence?.culture_highlights?.join(', ') || '';
-
-  return `User interests: ${userMotivation || 'Professional growth and impact'}
-Company culture: ${companyFit || 'Innovation and collaboration'}`;
-}
-
-function extractKeyStrengths(userPersonalization: any, unifiedContext: any): string {
-  const cvStrengths = userPersonalization?.key_strengths?.slice(0, 3) || [];
-  const amplifiers = unifiedContext?.strengthAmplifiers?.slice(0, 2) || [];
-
-  const combined = [...cvStrengths, ...amplifiers].slice(0, 4);
-  return combined.map((s: string) => `• ${s}`).join('\n') || '• Strong analytical and problem-solving abilities';
-}
-
-function extractConversationHooks(userPersonalization: any): string {
-  const hooks = [];
-
-  if (userPersonalization?.recent_projects?.length) {
-    hooks.push(`Recent project: ${userPersonalization.recent_projects[0]}`);
-  }
-
-  if (userPersonalization?.career_highlights?.length) {
-    hooks.push(`Achievement: ${userPersonalization.career_highlights[0]}`);
-  }
-
-  if (userPersonalization?.learning_interests?.length) {
-    hooks.push(`Learning focus: ${userPersonalization.learning_interests[0]}`);
-  }
-
-  return hooks.slice(0, 3).map(hook => `• ${hook}`).join('\n') || '• Professional development and growth mindset';
-}
 
 function generateOpeningMessage(persona: any): string {
   const role = persona?.role || 'interviewer';
