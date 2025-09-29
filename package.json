@@ -8,6 +8,7 @@
     "lint": "npm run lint --prefix preptalk"
   },
   "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.16.0",
     "claude": "^0.1.2",
     "code": "^5.2.4"
   }

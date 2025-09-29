@@ -3,6 +3,9 @@ import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
 import { createCurriculumAgent, CurriculumAgentOptions } from '@/lib/agents/curriculum';
 
+// Eliminate timeout issues for long-running curriculum generation
+export const maxDuration = 600; // 10 minutes - generous timeout for LLM processing
+
 type CurriculumRoundRecord = {
   round_number: number;
   [key: string]: unknown;
@@ -28,23 +31,31 @@ type CurriculumRecord = {
   [key: string]: unknown;
 };
 
-// Environment validation
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-const GOOGLE_AI_API_KEY = process.env.GOOGLE_AI_API_KEY!;
+// Environment validation - safe loading to avoid top-level errors
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
 
 export async function POST(request: NextRequest) {
+  console.log('🚀 [DEBUG] Curriculum generation started');
+
   try {
     // Check authentication using Supabase
     const supabaseAuth = await createClient();
     const { data: { user }, error: userError } = await supabaseAuth.auth.getUser();
 
+    console.log('🔐 [DEBUG] Auth check:', {
+      userExists: !!user,
+      userError: userError?.message || 'none',
+      nodeEnv: process.env.NODE_ENV
+    });
+
     let userId: string;
 
-    // For testing purposes, allow a hardcoded test user in development
-    if (process.env.NODE_ENV === 'development' && (!user || userError)) {
-      userId = 'test-user-yvoderooij';
-      console.log('🧪 Using test user for development:', userId);
+    // Development: Use your real user ID for testing
+    if (process.env.NODE_ENV === 'development') {
+      userId = '6a3ba98b-8b91-4ba0-b517-8afe6a5787ee';
+      console.log('🧪 Using your real user ID for testing:', userId);
     } else if (userError || !user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
@@ -56,7 +67,8 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const body = await request.json() as {
-      input?: string;
+      userInput?: string;  // Frontend sends userInput
+      input?: string;      // Fallback for backwards compatibility
       options?: Partial<CurriculumAgentOptions> | null;
       userProfile?: {
         excitement?: string;
@@ -74,10 +86,23 @@ export async function POST(request: NextRequest) {
         cv_analysis_id?: string; // 🔗 CV analysis ID for linking
       } | null;
     };
-    const { input, options = {}, userProfile, cvData } = body;
+    const { userInput, input, options = {}, userProfile, cvData } = body;
+    const finalInput = userInput || input;  // Use userInput if available, fallback to input
+
+    console.log('📝 [DEBUG] Request body parsed:', {
+      hasUserInput: !!userInput,
+      hasInput: !!input,
+      finalInput: finalInput?.substring(0, 50) + '...',
+      hasUserProfile: !!userProfile,
+      hasCvData: !!cvData,
+      cvDataKeys: cvData ? Object.keys(cvData) : []
+    });
+
+    console.log('🔍 [DEBUG] About to validate input...');
 
     // Validate input
-    if (!input || typeof input !== 'string') {
+    if (!finalInput || typeof finalInput !== 'string') {
+      console.log('❌ [DEBUG] Input validation failed:', { finalInput, type: typeof finalInput });
       return NextResponse.json(
         {
           error: 'Invalid input',
@@ -87,60 +112,66 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log('✅ [DEBUG] Input validation passed');
+
+    console.log('🔧 [DEBUG] Checking environment variables:', {
+      SUPABASE_URL: SUPABASE_URL ? 'present' : 'missing',
+      SUPABASE_ANON_KEY: SUPABASE_ANON_KEY ? 'present' : 'missing',
+      GOOGLE_API_KEY: GOOGLE_API_KEY ? 'present' : 'missing'
+    });
+
     // Check for required environment variables
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !GOOGLE_AI_API_KEY) {
-      console.error('Missing required environment variables');
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !GOOGLE_API_KEY) {
+      console.error('❌ [DEBUG] Missing required environment variables:', {
+        SUPABASE_URL: !!SUPABASE_URL,
+        SUPABASE_ANON_KEY: !!SUPABASE_ANON_KEY,
+        GOOGLE_API_KEY: !!GOOGLE_API_KEY
+      });
       return NextResponse.json(
         { error: 'Server configuration error' },
         { status: 500 }
       );
     }
 
+    console.log('✅ [DEBUG] Environment variables check passed');
+
+    console.log('🔌 [DEBUG] Creating Supabase client...');
+
     // Create Supabase client with service role for server-side operations
-    const supabase = createSupabaseClient(
-      SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY
-    );
-
-    // Check user's credit balance (skip for test user in development)
-    let availableCredits = 100;
-    const CURRICULUM_COST = 10;
-
-    if (userId !== 'test-user-yvoderooij') {
-      const { data: userCredits, error: creditsError } = await supabase
-        .from('user_credits')
-        .select('monthly_credits, bonus_credits, credits_used_this_month')
-        .eq('user_id', userId)
-        .single();
-
-      if (creditsError || !userCredits) {
-        return NextResponse.json(
-          { error: 'Failed to fetch user credits' },
-          { status: 500 }
-        );
-      }
-
-      availableCredits = (userCredits.monthly_credits || 0) + (userCredits.bonus_credits || 0) - (userCredits.credits_used_this_month || 0);
-
-      if (availableCredits < CURRICULUM_COST) {
-        return NextResponse.json(
-          {
-            error: 'Insufficient credits',
-            required: CURRICULUM_COST,
-            available: availableCredits
-          },
-          { status: 402 } // Payment Required
-        );
-      }
-    } else {
-      console.log('🧪 Bypassing credit check for test user');
+    let supabase;
+    try {
+      supabase = createSupabaseClient(
+        SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY
+      );
+      console.log('✅ [DEBUG] Supabase client created successfully');
+    } catch (supabaseError) {
+      console.error('❌ [DEBUG] Supabase client creation failed:', supabaseError);
+      throw supabaseError;
     }
 
+    // TODO: Re-enable credit system once user_credits table is properly set up
+    // console.log('💰 [DEBUG] Starting credit check...');
+
+    // Skip all credit checks during development
+    let availableCredits = 100;
+    const CURRICULUM_COST = 10;
+    console.log('🧪 [DEBUG] Credit checks disabled for development');
+
+    // console.log('✅ [DEBUG] Credit check completed successfully');
+
     // Create the curriculum agent
+    console.log('🔧 [DEBUG] Creating curriculum agent with:', {
+      supabaseUrl: SUPABASE_URL ? 'present' : 'missing',
+      supabaseKey: SUPABASE_ANON_KEY ? 'present' : 'missing',
+      googleApiKey: GOOGLE_API_KEY ? 'present' : 'missing',
+      nodeEnv: process.env.NODE_ENV
+    });
+
     const agent = createCurriculumAgent(
       SUPABASE_URL,
       SUPABASE_ANON_KEY,
-      GOOGLE_AI_API_KEY,
+      GOOGLE_API_KEY,
       {
         skipSchemaValidation: process.env.NODE_ENV === 'development',
         ...options,
@@ -148,7 +179,7 @@ export async function POST(request: NextRequest) {
     );
 
     // Start generation (this may take 30-60 seconds)
-    console.log(`[Curriculum] Starting generation for user ${userId}: ${input.substring(0, 100)}...`);
+    console.log(`[Curriculum] Starting generation for user ${userId}: ${finalInput.substring(0, 100)}...`);
     if (userProfile) {
       const areas = userProfile.weakAreas?.join(', ') || 'none specified';
       console.log(`[Curriculum] Personalization: Concerns: ${userProfile.concerns || 'none'}, Weak areas: ${areas}`);
@@ -161,45 +192,28 @@ export async function POST(request: NextRequest) {
     }
 
     const startTime = Date.now();
-    const curriculumId = await agent.generate(input, userProfile, cvData);
-    const duration = (Date.now() - startTime) / 1000;
+    console.log('⚡ [DEBUG] Starting agent.generate()...');
 
-    console.log(`[Curriculum] Generated ${curriculumId} in ${duration}s for user ${userId}`);
+    let curriculumId: string;
+    let duration: number;
 
-    // Deduct credits (skip for test user)
-    if (userId !== 'test-user-yvoderooij') {
-      const { error: creditError } = await supabase
-        .from('user_credits')
-        .update({
-          credits_used_this_month: supabase.rpc('increment', {
-            table_name: 'user_credits',
-            column_name: 'credits_used_this_month',
-            increment_by: CURRICULUM_COST
-          }),
-          updated_at: new Date().toISOString()
-        })
-        .eq('user_id', userId);
+    try {
+      curriculumId = await agent.generate(finalInput, userProfile, cvData);
+      duration = (Date.now() - startTime) / 1000;
 
-      if (creditError) {
-        console.error('Failed to deduct credits:', creditError);
-        // Continue anyway - we don't want to fail after successful generation
-      }
-
-      // Record the transaction
-      await supabase
-        .from('credit_transactions')
-        .insert({
-          user_id: userId,
-          transaction_type: 'used',
-          credit_type: 'monthly',
-          amount: -CURRICULUM_COST,
-          description: 'Curriculum generation',
-          related_entity_type: 'curriculum',
-          related_entity_id: curriculumId
-        });
-    } else {
-      console.log('🧪 Skipping credit deduction for test user');
+      console.log(`✅ [DEBUG] Generated ${curriculumId} in ${duration}s for user ${userId}`);
+      console.log(`[Curriculum] Generated ${curriculumId} in ${duration}s for user ${userId}`);
+    } catch (generateError) {
+      console.error('❌ [DEBUG] Agent.generate() failed:', {
+        error: generateError instanceof Error ? generateError.message : String(generateError),
+        stack: generateError instanceof Error ? generateError.stack : undefined
+      });
+      throw generateError;
     }
+
+    // TODO: Re-enable credit deduction once user_credits table is properly set up
+    // Skip all credit deductions during development
+    console.log('🧪 [DEBUG] Credit deduction disabled for development');
 
     // Fetch the generated curriculum
     const { data: curriculum, error: fetchError } = await supabase
@@ -248,6 +262,11 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
+    console.error('💥 [DEBUG] Curriculum generation error caught:', {
+      errorType: error instanceof Error ? error.constructor.name : typeof error,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
     console.error('[Curriculum] Generation error:', error);
 
     // Provide helpful error messages

@@ -1,124 +1,8 @@
-'use client';
+import { getDashboardData, type JourneyRound, type QuestionGuide } from '@/lib/dashboard/data';
+import Link from 'next/link';
+import { Mic } from 'lucide-react';
 
-type JourneyStatus = 'complete' | 'current' | 'upcoming';
-
-type JourneyRound = {
-  id: string;
-  order: number;
-  title: string;
-  persona: string;
-  focus: string;
-  status: JourneyStatus;
-};
-
-type QuestionGuide = {
-  id: string;
-  persona: string;
-  context: string;
-  prompts: string[];
-};
-
-const user = {
-  fullName: 'Alex Johnson',
-  tier: 'Pro',
-  company: 'Vercel',
-};
-
-const journey: JourneyRound[] = [
-  {
-    id: 'round-1',
-    order: 1,
-    title: 'Opportunity Alignment',
-    persona: 'Recruiter',
-    focus: 'Discover goals, motivations, and high-level fit.',
-    status: 'complete',
-  },
-  {
-    id: 'round-2',
-    order: 2,
-    title: 'Foundational Technical',
-    persona: 'Senior Engineer',
-    focus: 'Assess core fundamentals and communication style.',
-    status: 'current',
-  },
-  {
-    id: 'round-3',
-    order: 3,
-    title: 'Systems Collaboration',
-    persona: 'Principal Engineer',
-    focus: 'Co-design a system, debating trade-offs in real time.',
-    status: 'upcoming',
-  },
-  {
-    id: 'round-4',
-    order: 4,
-    title: 'Leadership Narrative',
-    persona: 'Hiring Manager',
-    focus: 'Showcase leadership instincts and stakeholder fluency.',
-    status: 'upcoming',
-  },
-  {
-    id: 'round-5',
-    order: 5,
-    title: 'Offer Calibration',
-    persona: 'Executive Sponsor',
-    focus: 'Align on scope, expectations, and compensation contours.',
-    status: 'upcoming',
-  },
-];
-
-const questionGuides: QuestionGuide[] = [
-  {
-    id: 'recruiter-questions',
-    persona: 'Recruiter / Talent Partner',
-    context: 'Pre-frame your story and confirm expectations during the opportunity alignment call.',
-    prompts: [
-      'What outcomes matter most in the first 90 days for this hire?',
-      'How do you define a successful collaboration with the hiring manager?',
-      'Is there anything about my background you’d like me to expand on before the next round?',
-    ],
-  },
-  {
-    id: 'technical-questions',
-    persona: 'Senior Engineer',
-    context: 'Demonstrate curiosity about the stack and how technical decisions get made.',
-    prompts: [
-      'What recent technical trade-off are you most proud of, and why?',
-      'How do you approach iterating on architecture while still shipping quickly?',
-      'Where do you see the biggest technical debt, and how is the team addressing it?',
-    ],
-  },
-  {
-    id: 'systems-questions',
-    persona: 'Principal Engineer',
-    context: 'Explore design philosophy and collaboration patterns during systems sessions.',
-    prompts: [
-      'How do product and platform teams share context when designing new systems?',
-      'Which metrics or signals tell you a design is ready for investment?',
-      'Where have past designs gone sideways, and what did the team learn?',
-    ],
-  },
-  {
-    id: 'leadership-questions',
-    persona: 'Hiring Manager',
-    context: 'Align on leadership approach, coaching style, and team dynamics.',
-    prompts: [
-      'What does great leadership look like on this team?',
-      'How do you prefer to give and receive feedback?',
-      'Where is the team growing fastest, and how can this role accelerate that?',
-    ],
-  },
-  {
-    id: 'executive-questions',
-    persona: 'Executive Sponsor',
-    context: 'Signal strategic thinking and ensure you understand the broader mandate.',
-    prompts: [
-      'Which strategic bets are top-of-mind for you this quarter?',
-      'How will you measure success for this hire at the one-year mark?',
-      'What should I know about the broader leadership team’s priorities?',
-    ],
-  },
-];
+type JourneyStatus = JourneyRound['status'];
 
 const statusLabel: Record<JourneyStatus, string> = {
   complete: 'Completed',
@@ -138,10 +22,62 @@ const markerTone: Record<JourneyStatus, string> = {
   upcoming: 'border-gray-200 text-gray-500 bg-gray-50',
 };
 
-export default function DashboardOverviewPage() {
-  const firstName = user.fullName.split(' ')[0] ?? 'there';
+const dataSourceCopy: Record<'fallback' | 'partial' | 'supabase', { label: string; tone: string }> = {
+  fallback: {
+    label: 'Demo data',
+    tone: 'border-gray-200 bg-gray-50 text-gray-600',
+  },
+  partial: {
+    label: 'Supabase (partial)',
+    tone: 'border-yellow-200 bg-yellow-50 text-yellow-700',
+  },
+  supabase: {
+    label: 'Supabase live data',
+    tone: 'border-green-200 bg-green-50 text-green-700',
+  },
+};
+
+const missingCopy: Record<string, string> = {
+  'auth:user': 'User session',
+  'auth:unauthenticated': 'No active session',
+  curricula: 'Curriculum data',
+  'curricula:empty': 'Curriculum data',
+  curriculum_rounds: 'Curriculum rounds',
+  jobs: 'Job info',
+  companies: 'Company info',
+  user_profiles: 'Profile details',
+};
+
+function formatMissingHint(code: string): string | null {
+  if (missingCopy[code]) {
+    return missingCopy[code];
+  }
+
+  if (code.startsWith('auth')) {
+    return null;
+  }
+
+  return code
+    .split(':')
+    .pop()
+    ?.replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase()) ?? null;
+}
+
+export const dynamic = 'force-dynamic';
+
+export default async function DashboardOverviewPage() {
+  const { user, journey, questionGuides, metadata } = await getDashboardData();
+
+  const firstName = user.fullName.split(' ')[0] || 'there';
+  const totalRounds = journey.length;
   const completedRounds = journey.filter((round) => round.status === 'complete').length;
-  const progress = Math.round((completedRounds / journey.length) * 100);
+  const progress = totalRounds > 0 ? Math.round((completedRounds / totalRounds) * 100) : 0;
+  const dataSource = dataSourceCopy[metadata.source];
+  const fallbackHints = metadata.missing
+    .map(formatMissingHint)
+    .filter((value): value is string => Boolean(value))
+    .slice(0, 3);
 
   return (
     <div className="px-4 py-8 md:px-8 md:py-12">
@@ -160,8 +96,13 @@ export default function DashboardOverviewPage() {
                   Your interview intelligence hub. Track every round, align with the personas you’ll meet, and stay momentum-rich from now until offer.
                 </p>
               </div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700">
-                {user.tier} tier
+              <div className="flex flex-wrap gap-2">
+                <div className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700">
+                  {user.tierLabel}
+                </div>
+                <div className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.18em] ${dataSource.tone}`}>
+                  {dataSource.label}
+                </div>
               </div>
             </div>
 
@@ -170,11 +111,19 @@ export default function DashboardOverviewPage() {
                 Applying to
               </p>
               <p className="mt-4 text-2xl font-semibold text-blue-900">
-                {user.company}
+                {user.companyName ?? 'Your target company'}
               </p>
+              {user.jobTitle && (
+                <p className="mt-1 text-sm font-medium text-blue-800">{user.jobTitle}</p>
+              )}
               <p className="mt-3 text-sm leading-relaxed text-blue-800">
                 Keep tailoring your narrative to the product vision and the personas on the other side of the table.
               </p>
+              {metadata.source !== 'supabase' && fallbackHints.length > 0 && (
+                <p className="mt-4 text-xs text-blue-700">
+                  Using fallback for: {fallbackHints.join(', ')}
+                </p>
+              )}
             </div>
           </div>
         </section>
@@ -195,7 +144,7 @@ export default function DashboardOverviewPage() {
               <div className="mt-2 h-2 rounded-full bg-gray-200">
                 <div
                   className="h-2 rounded-full bg-blue-500"
-                  style={{ width: `${progress}%` }}
+                  style={{ width: `${Math.min(progress, 100)}%` }}
                 />
               </div>
               <p className="mt-2 text-xs text-gray-500">
@@ -204,44 +153,71 @@ export default function DashboardOverviewPage() {
             </div>
           </div>
 
-          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-            {journey.map((round) => (
-              <JourneyCard key={round.id} round={round} />
-            ))}
-          </div>
+          {journey.length > 0 ? (
+            <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+              {journey.map((round: JourneyRound) => (
+                <JourneyCard key={round.id} round={round} />
+              ))}
+            </div>
+          ) : (
+            <div className="mt-8 rounded-lg border border-dashed border-gray-200 bg-gray-50 p-6 text-center">
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600">
+                  Ready to start your interview preparation journey?
+                </p>
+                <Link
+                  href="/curriculum"
+                  className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                >
+                  Create New Curriculum
+                </Link>
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm md:p-8">
           <div className="space-y-2">
-            <h2 className="text-2xl font-semibold text-gray-900">Questions to ask</h2>
+            <h2 className="text-2xl font-semibold text-gray-900">Questions to expect </h2>
             <p className="max-w-3xl text-sm text-gray-600 md:text-base">
-              Bring thoughtful prompts to every conversation. These questions help you uncover signal, build rapport, and demonstrate that you’re thinking beyond the scripted interview flow.
+              Expect questions like these—use them as a guide to surface signal, build rapport, and show you’re thinking beyond the script.
             </p>
+            {metadata.source !== 'supabase' && (
+              <p className="text-xs text-gray-500">
+                Sign in with Supabase to unlock user-specific interview intel. For now we’re showing curated starter prompts.
+              </p>
+            )}
           </div>
 
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {questionGuides.map((guide) => (
-              <article
-                key={guide.id}
-                className="flex h-full flex-col gap-4 rounded-lg border border-gray-200 bg-gray-50 p-5"
-              >
-                <header className="space-y-1">
-                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-600">
-                    {guide.persona}
-                  </p>
-                  <p className="text-sm text-gray-600">{guide.context}</p>
-                </header>
-                <ul className="space-y-2 text-sm text-gray-700">
-                  {guide.prompts.map((prompt, index) => (
-                    <li key={index} className="flex gap-2">
-                      <span className="mt-1 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-blue-400" />
-                      <span>{prompt}</span>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            ))}
-          </div>
+          {questionGuides.length > 0 ? (
+            <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {questionGuides.map((guide: QuestionGuide) => (
+                <article
+                  key={guide.id}
+                  className="flex h-full flex-col gap-4 rounded-lg border border-gray-200 bg-gray-50 p-5"
+                >
+                  <header className="space-y-1">
+                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-600">
+                      {guide.persona}
+                    </p>
+                    <p className="text-sm text-gray-600">{guide.context}</p>
+                  </header>
+                  <ul className="space-y-2 text-sm text-gray-700">
+                    {guide.prompts.map((prompt: string, index: number) => (
+                      <li key={index} className="flex gap-2">
+                        <span className="mt-1 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-blue-400" />
+                        <span>{prompt}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-6 rounded-lg border border-dashed border-blue-100 bg-blue-50 p-6 text-sm text-blue-700">
+              Questions will appear here once we have rounds configured for your target role.
+            </div>
+          )}
         </section>
       </div>
     </div>
@@ -268,10 +244,20 @@ function JourneyCard({ round }: { round: JourneyRound }) {
         <p className="text-sm leading-relaxed text-gray-600">{round.focus}</p>
       </div>
 
-      <footer className="mt-auto">
+      <footer className="mt-auto space-y-3">
         <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] ${statusTone[round.status]}`}>
           {statusLabel[round.status]}
         </span>
+
+        {round.curriculumId && round.roundNumber && (
+          <Link
+            href={`/interview/voice?curriculumId=${round.curriculumId}&roundNumber=${round.roundNumber}`}
+            className="inline-flex items-center gap-2 w-full px-3 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-center justify-center"
+          >
+            <Mic className="h-3 w-3" />
+            Practice voice
+          </Link>
+        )}
       </footer>
     </article>
   );

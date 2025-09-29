@@ -1,1 +1,0 @@
-export { StartInterviewButton } from './StartInterviewButton';
