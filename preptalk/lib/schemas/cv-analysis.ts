@@ -5,31 +5,31 @@ import { z } from 'zod';
 
 // Work Experience Schema - Flexible and forgiving
 export const WorkExperienceSchema = z.object({
-  company: z.string().default('Unknown Company').describe('Company name'),
-  position: z.string().default('Unknown Position').describe('Job title/position'),
+  company: z.string().nullish().default('Unknown Company').describe('Company name'),
+  position: z.string().nullish().default('Unknown Position').describe('Job title/position'),
   startDate: z.string().nullish().describe('Start date (any format)'),
   endDate: z.string().nullish().describe('End date or "Present"'),
   duration: z.string().nullish().describe('Duration in years/months'),
   location: z.string().nullish().describe('Work location'),
-  responsibilities: z.array(z.string()).default([]).describe('Key responsibilities and achievements'),
-  skills: z.array(z.string()).default([]).describe('Skills used in this role')
+  responsibilities: z.array(z.string()).nullish().default([]).describe('Key responsibilities and achievements'),
+  skills: z.array(z.string()).nullish().default([]).describe('Skills used in this role')
 });
 
 // Education Schema - Flexible and forgiving
 export const EducationSchema = z.object({
-  institution: z.string().default('Unknown Institution').describe('School/University name'),
+  institution: z.string().nullish().default('Unknown Institution').describe('School/University name'),
   degree: z.string().nullish().describe('Degree type (BS, MS, PhD, etc)'),
   field: z.string().nullish().describe('Field of study/major'),
   graduationDate: z.string().nullish().describe('Graduation date'),
   gpa: z.string().nullish().describe('GPA if mentioned'),
-  achievements: z.array(z.string()).default([]).describe('Academic achievements')
+  achievements: z.array(z.string()).nullish().default([]).describe('Academic achievements')
 });
 
 // Complete CV Analysis Schema
 export const CVAnalysisSchema = z.object({
   // Basic Information - Flexible and forgiving
   personalInfo: z.object({
-    fullName: z.string().default('Unknown Name').describe('Full name'),
+    fullName: z.string().nullish().default('Unknown Name').describe('Full name'),
     email: z.string().nullish().describe('Email address'),
     phone: z.string().nullish().describe('Phone number'),
     location: z.string().nullish().describe('Location/City'),
@@ -53,13 +53,13 @@ export const CVAnalysisSchema = z.object({
   // Education - Always an array, empty if none found
   education: z.array(EducationSchema).default([]).describe('Educational background'),
 
-  // Skills - Flexible with defaults
+  // Skills - Flexible with defaults and null-safe fallbacks
   skills: z.object({
-    technical: z.array(z.string()).default([]).describe('Technical skills'),
-    soft: z.array(z.string()).default([]).describe('Soft skills'),
-    languages: z.array(z.string()).default([]).describe('Programming languages'),
-    frameworks: z.array(z.string()).default([]).describe('Frameworks and libraries'),
-    tools: z.array(z.string()).default([]).describe('Tools and platforms')
+    technical: z.array(z.string()).nullish().catch([]).describe('Technical skills'),
+    soft: z.array(z.string()).nullish().catch([]).describe('Soft skills'),
+    languages: z.array(z.string()).nullish().catch([]).describe('Programming languages'),
+    frameworks: z.array(z.string()).nullish().catch([]).describe('Frameworks and libraries'),
+    tools: z.array(z.string()).nullish().catch([]).describe('Tools and platforms')
   }).describe('Skills breakdown'),
 
   // Analysis Metadata - Flexible with sensible defaults

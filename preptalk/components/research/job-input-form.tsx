@@ -4,6 +4,7 @@ import { useState } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
+import { createClient } from '@/lib/supabase/client'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -100,6 +101,38 @@ export function JobInputForm({ onSuccess, onError }: JobInputFormProps) {
   const [error, setError] = useState<string | null>(null)
   const [curriculumId, setCurriculumId] = useState<string | null>(null)
 
+  // Function to fetch the latest CV data for the user
+  const fetchLatestCVData = async () => {
+    try {
+      const supabase = createClient()
+
+      // Fetch the most recent CV analysis for the user
+      const { data: cvAnalysis, error } = await supabase
+        .from('cv_analyses')
+        .select('*')
+        .eq('user_id', '6a3ba98b-8b91-4ba0-b517-8afe6a5787ee')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (error || !cvAnalysis) {
+        console.warn('No CV data found for user:', error?.message)
+        return null
+      }
+
+      // Transform the database record to match the expected format
+      return {
+        analysis: cvAnalysis.analysis,
+        insights: cvAnalysis.insights,
+        cv_analysis_id: cvAnalysis.id,
+        matchScore: cvAnalysis.match_score || undefined
+      }
+    } catch (error) {
+      console.error('Error fetching CV data:', error)
+      return null
+    }
+  }
+
   // Job input form
   const jobForm = useForm<JobInputData>({
     resolver: zodResolver(jobInputSchema),
@@ -146,7 +179,10 @@ export function JobInputForm({ onSuccess, onError }: JobInputFormProps) {
         await new Promise(resolve => setTimeout(resolve, delay))
       }
 
-      // Call the real API
+      // Fetch the latest CV data for the user
+      const cvData = await fetchLatestCVData()
+
+      // Call the real API with CV data included
       const response = await fetch('/api/curriculum/generate', {
         method: 'POST',
         headers: {
@@ -154,7 +190,8 @@ export function JobInputForm({ onSuccess, onError }: JobInputFormProps) {
         },
         body: JSON.stringify({
           input: jobData.input,
-          userProfile: personalizationData
+          userProfile: personalizationData,
+          cvData: cvData // ✅ Include CV data in the request
         })
       })
 

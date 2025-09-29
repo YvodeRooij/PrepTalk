@@ -14,7 +14,7 @@ export class EnvironmentError extends Error {
 
 export function validateEnvironment(): void {
   const required = {
-    GOOGLE_AI_API_KEY: process.env.GOOGLE_AI_API_KEY,
+    GOOGLE_API_KEY: process.env.GOOGLE_AI_API_KEY,
     SUPABASE_URL: process.env.SUPABASE_URL,
     SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
   };

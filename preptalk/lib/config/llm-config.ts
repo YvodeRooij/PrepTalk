@@ -74,7 +74,7 @@ export interface LLMConfig {
 // Default configuration optimized for curriculum generation
 export const DEFAULT_LLM_CONFIG: LLMConfig = {
   primaryProvider: 'openai',
-  fallbackProviders: ['gemini', 'anthropic', 'mistral'],
+  fallbackProviders: ['gemini'], // Only use working providers
 
   models: {
     // Job parsing: Use Gemini for URL context support
@@ -215,6 +215,7 @@ export const DEVELOPMENT_LLM_CONFIG: Partial<LLMConfig> = {
   maxRetries: 2,
   retryDelayMs: 500,
   costTracking: true, // Always track costs in development
+  fallbackProviders: ['gemini'], // Only working providers in dev
   budgetLimits: {
     dailyBudgetCents: 100, // $1/day in development
     monthlyBudgetCents: 2000 // $20/month in development
@@ -249,15 +250,15 @@ export const PROVIDER_CAPABILITIES = {
   }
 } as const;
 
-// Task-specific provider recommendations
+// Task-specific provider recommendations - Only using working providers
 export const TASK_PROVIDER_RECOMMENDATIONS = {
   job_parsing: ['gemini', 'openai'], // Fast, accurate structured parsing
-  company_research: ['gemini', 'anthropic'], // Good at understanding context
-  persona_generation: ['anthropic', 'grok', 'openai'], // Creative character creation
+  company_research: ['gemini', 'openai'], // Good at understanding context
+  persona_generation: ['openai', 'gemini'], // Creative character creation
   question_generation: ['openai', 'gemini'], // Balanced creativity and structure
-  candidate_prep: ['anthropic', 'grok'], // Creative example generation
-  quality_evaluation: ['gemini', 'openai'], // Consistent, objective evaluation
-  unified_context_engine: ['gemini', 'anthropic'] // Critical synthesis - needs best context understanding
+  candidate_prep: ['openai', 'gemini'], // Creative example generation - Use working providers
+  quality_evaluation: ['openai', 'gemini'], // Complex schema evaluation - OpenAI first (research-backed)
+  unified_context_engine: ['gemini', 'openai'] // Critical synthesis - Use working providers
 } as const;
 
 // Utility functions for config management
@@ -268,14 +269,18 @@ export function getOptimalProvider(
   const recommendations = TASK_PROVIDER_RECOMMENDATIONS[task];
   const availableProviders = [config.primaryProvider, ...config.fallbackProviders];
 
-  // Find first recommended provider that's available
-  for (const recommended of recommendations) {
-    if (availableProviders.includes(recommended)) {
-      return recommended;
+  // If we have recommendations for this task, use them
+  if (recommendations) {
+    // Find first recommended provider that's available
+    for (const recommended of recommendations) {
+      if (availableProviders.includes(recommended)) {
+        return recommended;
+      }
     }
   }
 
-  return config.primaryProvider; // Fallback to primary
+  // Fallback to primary provider if no recommendations or none available
+  return config.primaryProvider;
 }
 
 export function calculateEstimatedCost(

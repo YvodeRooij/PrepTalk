@@ -70,7 +70,7 @@ export function loadLLMConfig(): LLMConfig {
  */
 export function validateProviderCredentials(config: LLMConfig): void {
   const requiredKeys: Record<string, string> = {
-    'gemini': 'GOOGLE_AI_API_KEY',
+    'gemini': 'GOOGLE_API_KEY', // Use GOOGLE_API_KEY as defined in .env.local
     'openai': 'OPENAI_API_KEY',
     'anthropic': 'ANTHROPIC_API_KEY',
     'grok': 'GROK_API_KEY'

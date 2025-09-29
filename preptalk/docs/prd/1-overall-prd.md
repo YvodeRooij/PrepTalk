@@ -151,7 +151,7 @@ graph TD
         B["Credits: 4 remaining"]
         C["Amazon SDE III<br>Seattle, WA"]
         D["Your Interview Journey"]
-        E["① Phone --> ② Tech --> ③ Behav --> ④ System --> ⑤ Final"]
+        E["① Phone --> ② Tech --> ③ Behav --> ④ System --> ⑤ Final"] (old - do not use these names!)
         F["[Start Round 1] (1 credit)"]
         G["Smart Questions to Ask:"]
         H["• How does Amazon measure success...<br>• What's the team's approach to..."]

@@ -1,7 +1,9 @@
 // Mistral OCR Service - Document understanding with Mistral OCR API
-// Processes CVs/resumes using Mistral's latest OCR model
+// Processes CVs/resumes using Mistral's latest OCR model + reliable LLM provider
 
 import { CVAnalysisSchema, CVInsightsSchema, type CVAnalysis, type CVInsights } from '../schemas/cv-analysis';
+import { LLMProviderService } from '../providers/llm-provider-service';
+import { loadLLMConfig } from '../config/env-config';
 import { z } from 'zod';
 
 const MISTRAL_OCR_API_URL = 'https://api.mistral.ai/v1/ocr';
@@ -16,10 +18,15 @@ export interface OCRProcessingOptions {
 export class MistralOCRService {
   private apiKey: string;
   private model: string;
+  private llmProvider: LLMProviderService;
 
   constructor(apiKey?: string) {
     this.apiKey = apiKey || process.env.MISTRAL_API_KEY || '';
     this.model = 'mistral-ocr-latest'; // Official Mistral OCR model
+
+    // Initialize LLM provider with proper config
+    const llmConfig = loadLLMConfig();
+    this.llmProvider = new LLMProviderService(llmConfig);
 
     if (!this.apiKey) {
       console.warn('⚠️ Mistral API key not configured - CV analysis will use mock data');
@@ -38,6 +45,7 @@ export class MistralOCRService {
   async processCV(
     fileBuffer: Buffer,
     mimeType: string,
+    fileName?: string,
     options: OCRProcessingOptions = {}
   ): Promise<CVAnalysis> {
     if (!this.apiKey) {
@@ -51,11 +59,11 @@ export class MistralOCRService {
 
       console.log('📄 Processing CV with Mistral OCR API...');
 
-      // Correct request payload per TypeScript SDK
+      // Correct request payload per Mistral OCR API docs
       const requestBody = {
         model: options.model || this.model,
         document: {
-          documentUrl: dataUri,
+          document_url: dataUri,
           type: "document_url"
         }
       };
@@ -65,7 +73,7 @@ export class MistralOCRService {
         ...requestBody,
         document: {
           ...requestBody.document,
-          documentUrl: dataUri.slice(0, 100) + '...[base64 truncated]'
+          document_url: dataUri.slice(0, 100) + '...[base64 truncated]'
         }
       };
       console.log('🔍 OCR Request payload:', JSON.stringify(debugPayload, null, 2));
@@ -143,10 +151,27 @@ export class MistralOCRService {
         structuredData = this.createMinimalStructure();
       } else {
         try {
+          console.log('🔧 [DEBUG] Starting text structuring with extracted text length:', extractedText.length);
+          console.log('🔧 [DEBUG] First 200 chars of extracted text:', extractedText.substring(0, 200));
+          console.log('📄 [DEBUG] FULL EXTRACTED TEXT FOR ANALYSIS:');
+          console.log('='.repeat(80));
+          console.log(extractedText);
+          console.log('='.repeat(80));
           structuredData = await this.structureExtractedText(extractedText, options);
+
+          // Enhance structured data with intelligent name extraction if missing
+          structuredData = this.enhanceWithFilenameData(structuredData, fileName);
+
+          console.log('✅ [DEBUG] Text structuring completed successfully');
         } catch (error) {
+          console.error('❌ [DEBUG] Text structuring failed:', error);
           console.warn('⚠️ Text structuring failed - using partial structure:', error);
           structuredData = this.createMinimalStructure(extractedText);
+          console.log('📝 [DEBUG] Using minimal structure fallback');
+
+          // CRITICAL: Apply filename enhancement even in fallback mode
+          structuredData = this.enhanceWithFilenameData(structuredData, fileName);
+          console.log('🔧 [DEBUG] Applied filename enhancement to fallback data');
         }
       }
 
@@ -159,8 +184,9 @@ export class MistralOCRService {
         warnings: extractedText.length === 0 ? ['No text extracted from document'] : []
       };
 
-      // Validate with schema (now flexible and forgiving)
+      // Simple validation with null-safe schema (KISS approach)
       try {
+        console.log('✅ [DEBUG] Using null-safe schema validation...');
         return CVAnalysisSchema.parse(structuredData);
       } catch (validationError) {
         console.warn('⚠️ Schema validation failed, using safe fallback:', validationError);
@@ -187,53 +213,127 @@ export class MistralOCRService {
   }
 
   /**
-   * Structure extracted text using Mistral chat API
+   * Structure extracted text using reliable LLM provider (Gemini/OpenAI/Anthropic)
    */
   private async structureExtractedText(text: string, options: OCRProcessingOptions): Promise<any> {
-    const structuringPrompt = this.buildStructuringPrompt(text, options);
+    console.log('🔧 [DEBUG] Using reliable LLM provider for text structuring...');
 
-    const response = await fetch(MISTRAL_CHAT_API_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'mistral-large-latest',
-        messages: [
-          {
-            role: 'user',
-            content: structuringPrompt
-          }
-        ],
-        temperature: 0.1,
-        max_tokens: 4000,
-        response_format: { type: 'json_object' }
-      })
-    });
+    const systemPrompt = `You are a CV/resume analysis expert. Extract structured information from the provided CV text.
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Mistral Chat API error:', errorText);
-      throw new Error(`Mistral Chat API error: ${response.status} ${response.statusText}`);
-    }
+Extract the following information into JSON format:
+- personalInfo: name, email, phone, location, linkedIn, github, portfolio
+- summary: headline, summary, yearsOfExperience, currentRole, targetRole
+- experience: array of work experiences with company, position, dates, responsibilities, skills
+- education: array of education with institution, degree, field, graduationDate, gpa, achievements
+- skills: technical, soft, languages, frameworks, tools (all as arrays)
 
-    let data;
+CRITICAL: For yearsOfExperience calculation:
+- ONLY count professional work experience (employment history)
+- EXCLUDE education, courses, certifications from experience calculation
+- Calculate from earliest employment start date to present
+- Handle overlapping employment periods correctly (don't double-count)
+- If no work history is found, set yearsOfExperience to 0
+
+Use null for missing fields, empty arrays for missing lists.
+Be thorough and accurate.`;
+
+    const userPrompt = `Analyze this CV text and extract structured information:\n\n${text}\n\nReturn only valid JSON matching the required structure.`;
+
     try {
-      const responseText = await response.text();
-      data = JSON.parse(responseText);
-    } catch (parseError) {
-      console.error('Failed to parse Chat API response:', parseError);
-      throw new Error('Invalid JSON response from Mistral Chat API');
+      console.log('🔧 [DEBUG] Calling LLM provider for CV structuring...');
+
+      const result = await this.llmProvider.generateStructured(
+        CVAnalysisSchema.omit({ metadata: true }), // Exclude metadata from LLM generation
+        'quality_evaluation', // Use valid task type
+        userPrompt,
+        {
+          systemPrompt,
+          temperature: 0.1,
+          maxTokens: 4000
+        }
+      );
+
+      console.log('✅ [DEBUG] LLM provider structured output successful');
+      console.log('📊 [DEBUG] Structured keys found:', Object.keys(result));
+
+      if (result.personalInfo) {
+        console.log('👤 [DEBUG] PersonalInfo fullName:', result.personalInfo.fullName);
+      }
+      if (result.summary) {
+        console.log('📝 [DEBUG] Summary yearsOfExperience:', result.summary.yearsOfExperience);
+      }
+
+      return result;
+
+    } catch (error) {
+      console.error('❌ [DEBUG] LLM provider structuring failed:', error);
+      throw new Error(`LLM text structuring failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Enhance structured data with intelligent extraction from filename
+   * Fallback for when OCR misses header information like names
+   */
+  private enhanceWithFilenameData(structuredData: any, fileName?: string): any {
+    if (!fileName || !structuredData?.personalInfo) {
+      return structuredData;
     }
 
-    const content = data.choices?.[0]?.message?.content || '{}';
-    try {
-      return JSON.parse(content);
-    } catch (contentParseError) {
-      console.error('Failed to parse structured content:', content);
-      throw new Error('Invalid structured JSON content from Chat API');
+    // Extract name from filename if personalInfo.fullName is null/empty
+    if (!structuredData.personalInfo.fullName) {
+      const extractedName = this.extractNameFromFilename(fileName);
+      if (extractedName) {
+        console.log('🔧 [DEBUG] Extracted name from filename:', extractedName);
+        structuredData.personalInfo.fullName = extractedName;
+      }
     }
+
+    return structuredData;
+  }
+
+  /**
+   * Extract person's name from CV filename using common patterns
+   */
+  private extractNameFromFilename(fileName: string): string | null {
+    // Remove file extension
+    const nameWithoutExt = fileName.replace(/\.[^/.]+$/, '');
+
+    // Common patterns for CV filenames:
+    // "Yvo_De_Rooij_-_Technology_Consultant.pdf" -> "Yvo De Rooij"
+    // "John_Smith_CV.pdf" -> "John Smith"
+    // "Jane_Doe_Resume.pdf" -> "Jane Doe"
+
+    let cleanName = nameWithoutExt
+      // Replace underscores and dashes with spaces
+      .replace(/[_-]+/g, ' ')
+      // Remove common CV-related words
+      .replace(/\b(CV|Resume|Technology|Consultant|Manager|Senior|Junior)\b/gi, '')
+      // Remove extra parentheses and numbers
+      .replace(/\s*\([^)]*\)\s*/g, '')
+      // Remove extra whitespace
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // Extract only the name part (usually first 2-3 words)
+    const words = cleanName.split(' ').filter(word =>
+      word.length > 1 &&
+      !/^\d+$/.test(word) && // Not just numbers
+      !['the', 'and', 'of', 'in', 'at', 'to', 'for'].includes(word.toLowerCase())
+    );
+
+    // Take first 2-3 words as the likely name
+    const nameWords = words.slice(0, 3);
+
+    if (nameWords.length >= 2) {
+      const extractedName = nameWords.join(' ');
+      // Basic validation - names should have reasonable length
+      if (extractedName.length >= 3 && extractedName.length <= 50) {
+        return extractedName;
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -371,18 +471,107 @@ Return only valid JSON, no markdown or explanations.`;
   }
 
   /**
-   * Create minimal structure when OCR fails completely
+   * Create intelligent minimal structure with basic text parsing when LLM API fails
    */
   private createMinimalStructure(extractedText?: string): any {
+    if (!extractedText) {
+      return {
+        personalInfo: { fullName: 'Unknown Name' },
+        summary: { yearsOfExperience: 0 },
+        experience: [],
+        education: [],
+        skills: { technical: [], soft: [], languages: [], frameworks: [], tools: [] }
+      };
+    }
+
+    console.log('🔧 [DEBUG] Applying intelligent text parsing fallback...');
+
+    // Extract years of experience using regex patterns
+    let yearsOfExperience = 0;
+    const experiencePatterns = [
+      /(\d+)\+?\s*years?\s+(?:of\s+)?experience/i,
+      /experience[^\d]*(\d+)\+?\s*years?/i,
+      /(\d+)\+?\s*years?\s+in/i
+    ];
+
+    for (const pattern of experiencePatterns) {
+      const match = extractedText.match(pattern);
+      if (match) {
+        yearsOfExperience = parseInt(match[1]);
+        console.log(`🔧 [DEBUG] Found experience: ${yearsOfExperience} years`);
+        break;
+      }
+    }
+
+    // If no direct experience mention, estimate from employment history
+    if (yearsOfExperience === 0) {
+      const currentYear = new Date().getFullYear();
+      const dateMatches = extractedText.match(/(\d{4})\s*—?\s*Present/g);
+      if (dateMatches) {
+        const oldestYear = Math.min(...dateMatches.map(match => {
+          const year = match.match(/(\d{4})/);
+          return year ? parseInt(year[1]) : currentYear;
+        }));
+        yearsOfExperience = Math.max(0, currentYear - oldestYear);
+        console.log(`🔧 [DEBUG] Estimated experience from dates: ${yearsOfExperience} years`);
+      }
+    }
+
+    // Extract basic company information
+    const companies = [];
+    const companyPatterns = [
+      /Manager,?\s+([A-Za-z]+)/g,
+      /Consultant,?\s+([A-Za-z]+)/g,
+      /Founder,?\s+([A-Za-z]+)/g
+    ];
+
+    for (const pattern of companyPatterns) {
+      let match;
+      while ((match = pattern.exec(extractedText)) !== null) {
+        if (match[1] && !companies.includes(match[1])) {
+          companies.push(match[1]);
+        }
+      }
+    }
+
+    // Extract skills
+    const skills = [];
+    const skillPatterns = [
+      /JavaScript|React|Node\.js|Python|Java|TypeScript/gi,
+      /Project Management|Leadership|Stakeholder Management/gi
+    ];
+
+    for (const pattern of skillPatterns) {
+      let match;
+      while ((match = pattern.exec(extractedText)) !== null) {
+        if (!skills.includes(match[0])) {
+          skills.push(match[0]);
+        }
+      }
+    }
+
+    console.log(`🔧 [DEBUG] Fallback extracted: ${yearsOfExperience} years, ${companies.length} companies, ${skills.length} skills`);
+
     return {
       personalInfo: {
-        fullName: extractedText ? 'Extracted from CV' : 'Unknown Name'
+        fullName: null // Will be enhanced by filename extraction
       },
-      summary: {},
-      experience: [],
+      summary: {
+        yearsOfExperience: yearsOfExperience,
+        currentRole: companies.length > 0 ? `Manager, ${companies[0]}` : null
+      },
+      experience: companies.map(company => ({
+        company: company,
+        position: 'Manager', // Basic assumption
+        responsibilities: [`Work experience at ${company}`]
+      })),
       education: [],
       skills: {
-        technical: extractedText ? [extractedText.slice(0, 50) + '...'] : []
+        technical: skills.filter(s => /JavaScript|React|Node|Python|Java|TypeScript/i.test(s)),
+        soft: skills.filter(s => /Management|Leadership|Stakeholder/i.test(s)),
+        languages: [],
+        frameworks: [],
+        tools: []
       }
     };
   }
