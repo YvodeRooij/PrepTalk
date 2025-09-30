@@ -19,21 +19,16 @@ import { selectTemplateByRoundType } from '@/lib/voice/template-selector';
 
 export async function POST(request: NextRequest) {
   try {
-    // Authentication (following your curriculum generation pattern)
+    // Authentication
     const supabase = await createClient();
     const { data: { user }, error: userError } = await supabase.auth.getUser();
 
-    let userId: string;
-
-    // Development: Use your real user ID for testing
-    if (process.env.NODE_ENV === 'development') {
-      userId = '6a3ba98b-8b91-4ba0-b517-8afe6a5787ee';
-      console.log('🧪 Using your real user ID for testing:', userId);
-    } else if (userError || !user) {
+    if (userError || !user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    } else {
-      userId = user.id;
     }
+
+    const userId = user.id;
+    console.log('✅ Authenticated user for voice prompt:', userId);
 
     const { curriculumId, roundNumber } = await request.json();
 

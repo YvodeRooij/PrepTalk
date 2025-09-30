@@ -29,6 +29,11 @@ export async function middleware(request: NextRequest) {
     }
   );
 
+  // Allow OAuth callback to complete without auth check
+  if (request.nextUrl.pathname.startsWith('/auth/callback')) {
+    return supabaseResponse;
+  }
+
   // Refresh session if expired - important for client-side auth
   const { data: { user } } = await supabase.auth.getUser();
 

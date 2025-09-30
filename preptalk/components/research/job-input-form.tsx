@@ -106,11 +106,18 @@ export function JobInputForm({ onSuccess, onError }: JobInputFormProps) {
     try {
       const supabase = createClient()
 
+      // Get authenticated user
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) {
+        console.warn('No authenticated user found')
+        return null
+      }
+
       // Fetch the most recent CV analysis for the user
       const { data: cvAnalysis, error } = await supabase
         .from('cv_analyses')
         .select('*')
-        .eq('user_id', '6a3ba98b-8b91-4ba0-b517-8afe6a5787ee')
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(1)
         .single()

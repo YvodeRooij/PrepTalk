@@ -25,33 +25,35 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create Supabase client for database operations
-    // Use service role in development to bypass RLS
-    const supabase = process.env.NODE_ENV === 'development' && userId === '6a3ba98b-8b91-4ba0-b517-8afe6a5787ee'
+    // Get authenticated user first
+    const supabaseAuth = await createClient();
+    const { data: { user }, error: authError } = await supabaseAuth.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    // Verify the userId matches the authenticated user
+    if (user.id !== userId) {
+      return NextResponse.json(
+        { error: 'User ID mismatch' },
+        { status: 403 }
+      );
+    }
+
+    const authenticatedUserId = user.id;
+    console.log('✅ Authenticated user for CV analysis:', authenticatedUserId);
+
+    // Use service role in development to bypass RLS if needed
+    const supabase = process.env.NODE_ENV === 'development'
       ? createSupabaseClient(
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
           process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
         )
-      : await createClient();
-
-    // Development: Allow testing with your real user ID
-    let authenticatedUserId: string;
-
-    if (process.env.NODE_ENV === 'development' && userId === '6a3ba98b-8b91-4ba0-b517-8afe6a5787ee') {
-      authenticatedUserId = userId;
-      console.log('🧪 Using your real user ID for CV analysis:', userId);
-    } else {
-      // Verify user authentication in production
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-      if (authError || !user || user.id !== userId) {
-        return NextResponse.json(
-          { error: 'Unauthorized' },
-          { status: 401 }
-        );
-      }
-      authenticatedUserId = user.id;
-    }
+      : supabaseAuth;
 
     // Convert file to buffer
     const arrayBuffer = await file.arrayBuffer();
