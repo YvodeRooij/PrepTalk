@@ -46,24 +46,20 @@ export async function POST(request: NextRequest) {
 
     console.log('🔐 [DEBUG] Auth check:', {
       userExists: !!user,
+      userId: user?.id,
       userError: userError?.message || 'none',
       nodeEnv: process.env.NODE_ENV
     });
 
-    let userId: string;
-
-    // Development: Use your real user ID for testing
-    if (process.env.NODE_ENV === 'development') {
-      userId = '6a3ba98b-8b91-4ba0-b517-8afe6a5787ee';
-      console.log('🧪 Using your real user ID for testing:', userId);
-    } else if (userError || !user) {
+    // Always require authentication
+    if (userError || !user) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       );
-    } else {
-      userId = user.id;
     }
+
+    const userId = user.id;
 
     // Parse request body
     const body = await request.json() as {

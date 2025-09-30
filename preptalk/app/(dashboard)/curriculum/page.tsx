@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Upload, ExternalLink, Loader2, ChevronLeft } from 'lucide-react';
+import { createClient } from '@/lib/supabase/client';
 
 type Step = 'job-url' | 'cv-upload' | 'profile' | 'generating' | 'complete';
 
@@ -22,6 +23,22 @@ export default function CurriculumCreatePage() {
   const [generating, setGenerating] = useState(false);
   const [curriculumId, setCurriculumId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+
+  // Get authenticated user on mount
+  useEffect(() => {
+    const getUser = async () => {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setUserId(user.id);
+      } else {
+        // Redirect to login if not authenticated
+        router.push('/login');
+      }
+    };
+    getUser();
+  }, [router]);
 
   const handleJobUrlSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,10 +89,14 @@ export default function CurriculumCreatePage() {
     setError(null); // Clear any previous errors
 
     try {
+      if (!userId) {
+        throw new Error('User not authenticated');
+      }
+
       // Step 1: Upload and analyze CV
       const cvFormData = new FormData();
       cvFormData.append('file', formData.cvFile!);
-      cvFormData.append('userId', '6a3ba98b-8b91-4ba0-b517-8afe6a5787ee');
+      cvFormData.append('userId', userId);
 
       const cvResponse = await fetch('/api/cv/analyze', {
         method: 'POST',

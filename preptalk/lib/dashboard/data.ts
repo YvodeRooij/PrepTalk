@@ -28,12 +28,16 @@ export type DashboardUser = {
   jobTitle: string | null;
   targetRole?: string | null;
   experienceLevel?: string | null;
+  avatarUrl?: string | null;
+  email?: string | null;
+  provider?: string | null;
 };
 
 export type DashboardData = {
   user: DashboardUser;
   journey: JourneyRound[];
   questionGuides: QuestionGuide[];
+  hasOwnCurriculum: boolean;
   metadata: {
     source: 'fallback' | 'partial' | 'supabase';
     loadedAt: string;
@@ -305,6 +309,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     user: { ...fallbackUser },
     journey: [...fallbackJourney],
     questionGuides: [...fallbackQuestionGuides],
+    hasOwnCurriculum: false,
     metadata: {
       source,
       loadedAt: new Date().toISOString(),
@@ -316,23 +321,32 @@ export async function getDashboardData(): Promise<DashboardData> {
     // Get user first
     const { data: authData, error: authError } = await supabase.auth.getUser();
 
-    let supabaseUser = authData?.user ?? null;
+    const supabaseUser = authData?.user ?? null;
 
-    // Development: Use your real user ID for testing
-    if (process.env.NODE_ENV === 'development') {
-      supabaseUser = { id: '6a3ba98b-8b91-4ba0-b517-8afe6a5787ee' } as any;
-      console.log('🧪 Using your real user ID for dashboard:', supabaseUser.id);
-    }
-
-    if (authError && process.env.NODE_ENV !== 'development') {
+    if (authError) {
       missing.push('auth:user');
+      console.error('Auth error in dashboard:', authError);
     }
 
-    // Get most recent curriculum (curricula table doesn't have user_id)
+    if (!supabaseUser) {
+      missing.push('auth:user');
+    } else {
+      console.log('✅ Authenticated user for dashboard:', supabaseUser.id);
+    }
+
+    // Get most recent curriculum for this user (via cv_analyses.user_id)
     const { data: curriculumData, error: curriculumError } = await supabase
       .from('curricula')
-      .select('id, job_id, title, total_rounds, estimated_total_minutes')
+      .select(`
+        id,
+        job_id,
+        title,
+        total_rounds,
+        estimated_total_minutes,
+        cv_analyses!inner(user_id)
+      `)
       .eq('is_active', true)
+      .eq('cv_analyses.user_id', supabaseUser?.id)
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -371,6 +385,7 @@ export async function getDashboardData(): Promise<DashboardData> {
       if (parsedRounds.length > 0) {
         data.journey = buildJourney(parsedRounds, currentRound, curriculum.id);
         data.questionGuides = buildQuestionGuides(parsedRounds, fallbackQuestionGuides);
+        data.hasOwnCurriculum = true;
         source = 'partial';
       }
 
@@ -477,7 +492,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     if (supabaseUser?.id) {
       const { data: profileData, error: profileError } = await supabase
         .from('user_profiles')
-        .select('full_name, target_role, experience_level')
+        .select('full_name, avatar_url, target_role, experience_level')
         .eq('user_id', supabaseUser.id)
         .maybeSingle();
 
@@ -485,8 +500,31 @@ export async function getDashboardData(): Promise<DashboardData> {
         missing.push('user_profiles');
       }
 
+      // Use profile data if available, otherwise fallback to OAuth metadata from auth.users
       if (profileData?.full_name) {
         data.user.fullName = profileData.full_name;
+      } else if (authData?.user) {
+        // Fallback to OAuth metadata
+        data.user.fullName =
+          authData.user.user_metadata?.full_name ||
+          authData.user.user_metadata?.name ||
+          authData.user.email?.split('@')[0] ||
+          'there';
+      }
+
+      // Avatar URL from profile or OAuth
+      if (profileData?.avatar_url) {
+        data.user.avatarUrl = profileData.avatar_url;
+      } else if (authData?.user) {
+        data.user.avatarUrl =
+          authData.user.user_metadata?.avatar_url ||
+          authData.user.user_metadata?.picture;
+      }
+
+      // Email and provider for display
+      if (authData?.user) {
+        data.user.email = authData.user.email;
+        data.user.provider = authData.user.app_metadata?.provider;
       }
 
       if (profileData?.target_role) {
