@@ -34,8 +34,14 @@ export async function parseJob(
   }
 
   // Use the best source data we have
+  // ✅ FIXED: Use programmatic validation instead of s.validation.isUseful
   const bestSource = state.discoveredSources
-    ?.filter(s => s.validation?.isUseful)
+    ?.filter(s => s.data && (
+      s.data.company ||
+      s.data.title ||
+      (s.data.requirements && s.data.requirements.length >= 3) ||
+      (s.data.responsibilities && s.data.responsibilities.length >= 3)
+    ))
     ?.sort((a, b) => b.trustScore - a.trustScore)[0];
 
   if (!bestSource) {
@@ -98,8 +104,31 @@ Return ONLY a valid JSON object (no markdown, no explanation) with these exact f
       } as ParsedJob,
     };
   } catch (error) {
+    console.warn(`⚠️  parseJob failed: ${error instanceof Error ? error.message : 'Unknown'}`);
+    console.log(`⚠️  Using fallback job data from user input: ${state.userInput}`);
+
+    // Fallback: Extract basic info from user input or source data
+    const isUrl = state.userInput.includes('http');
+    const companyName = bestSource.data?.company || (isUrl ? 'Unknown Company' : state.userInput.split(' ')[0]);
+    const roleTitle = bestSource.data?.title || (isUrl ? 'Unknown Role' : state.userInput);
+
     return {
-      errors: [`Failed to parse job: ${error instanceof Error ? error.message : 'Unknown'}`],
+      jobData: {
+        title: roleTitle,
+        company_name: companyName,
+        level: 'mid',
+        responsibilities: ['Execute on key projects', 'Collaborate with team members', 'Contribute to company goals'],
+        required_skills: ['Relevant experience', 'Strong communication skills', 'Team collaboration'],
+        preferred_skills: [],
+        experience_level: '3-5 years',
+        location: 'Remote',
+        work_arrangement: 'remote',
+        source_url: bestSource.url,
+        raw_description: '',
+        parsing_confidence: 0.3,
+        extraction_timestamp: new Date().toISOString(),
+      } as ParsedJob,
+      warnings: [...(state.warnings || []), 'Using fallback job parsing due to LLM failure'],
     };
   }
 }

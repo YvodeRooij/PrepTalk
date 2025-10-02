@@ -53,6 +53,12 @@ export interface CandidatePrep {
     what_great_answers_sound_like: string[];
     how_to_demonstrate_company_knowledge: string[];
   };
+  standard_questions_prep: Array<{
+    question: string;
+    why_asked: string;
+    approach: string;
+    key_points: string[];
+  }>;
 }
 
 export type NonTechnicalRoundType =
@@ -265,6 +271,15 @@ export async function generateDynamicPersonas(
   config: { llmProvider?: LLMProviderService }
 ): Promise<Partial<CurriculumState>> {
 
+  // ⚡ CV DEMO MODE: Skip persona generation (will be created in generateSingleRound)
+  if (state.mode === 'cv_round_only') {
+    console.log('⚡ [CV DEMO] Skipping persona generation for fast demo');
+    return {
+      personas: [],
+      currentStep: 'personas_skipped_demo'
+    };
+  }
+
   console.log('🎭 Generating dynamic personas from competitive intelligence...');
 
   if (!state.competitiveIntelligence || !state.jobData || !state.companyContext) {
@@ -282,15 +297,25 @@ export async function generateDynamicPersonas(
     'executive_final'
   ];
 
-  const generatedPersonas: InterviewerPersona[] = [];
+  // Build enhanced prompt with unified context (same for all personas)
+  const unifiedContextPrompt = buildUnifiedContextPrompt(state.unifiedContext);
+  const userPersonalizationContext = getUserPersonalizationContext(state.userProfile, state.cvData);
+  const friendlyStyle = state.userProfile ? getFriendlyStyle(state.userProfile) : '';
 
-  for (let i = 0; i < roundTypes.length; i++) {
-    const roundType = roundTypes[i];
+  // OOTB Structured Output Schema - Define once, reuse for batch
+  const PersonaDataSchema = z.object({
+    name: z.string().min(1).describe('Full name of the interviewer'),
+    role: z.string().min(1).describe('Job title and company'),
+    tenure_years: z.number().int().min(1).max(15).describe('Years at company'),
+    personality_traits: z.array(z.string()).min(2).max(5).describe('Key personality traits'),
+    strategic_advantages_they_know: z.array(z.string()).max(3).describe('Strategic advantages'),
+    recent_developments_they_lived_through: z.array(z.string()).max(3).describe('Recent developments'),
+    competitive_context_understanding: z.string().min(1).describe('Competitive landscape understanding')
+  });
 
-    // Build enhanced prompt with unified context
-    const unifiedContextPrompt = buildUnifiedContextPrompt(state.unifiedContext);
-
-    const personaPrompt = `Generate a realistic interviewer persona for ${jobData.company_name}'s ${roundType.replace('_', ' ')} interview round.
+  // Build all prompts for batch processing
+  const batchPrompts = roundTypes.map((roundType) => ({
+    prompt: `Generate a realistic interviewer persona for ${jobData.company_name}'s ${roundType.replace('_', ' ')} interview round.
 
 COMPANY CONTEXT:
 - Company: ${companyContext.name}
@@ -307,7 +332,7 @@ JOB DETAILS:
 - Level: ${jobData.level}
 - Company: ${jobData.company_name}
 
-${getUserPersonalizationContext(state.userProfile, state.cvData)}
+${userPersonalizationContext}
 
 ${unifiedContextPrompt}
 
@@ -316,7 +341,7 @@ Create a realistic persona who:
 2. Has lived through recent company developments
 3. Asks standard interview questions but recognizes competitive intelligence in answers
 4. Has an appropriate seniority level for this interview round
-${state.userProfile ? `5. ADAPTS QUESTIONING STYLE: Is ${getFriendlyStyle(state.userProfile)} toward candidates with their concerns/background` : ''}
+${friendlyStyle ? `5. ADAPTS QUESTIONING STYLE: Is ${friendlyStyle} toward candidates with their concerns/background` : ''}
 
 Return ONLY a JSON object with this structure:
 {
@@ -327,53 +352,58 @@ Return ONLY a JSON object with this structure:
   "strategic_advantages_they_know": ["advantage1", "advantage2"],
   "recent_developments_they_lived_through": ["development1", "development2"],
   "competitive_context_understanding": "One sentence about how they understand company vs competitors"
-}`;
+}`,
+    systemPrompt: undefined
+  }));
 
-    try {
-      // OOTB Structured Output - No custom JSON parsing needed
-      const PersonaDataSchema = z.object({
-        name: z.string().min(1).describe('Full name of the interviewer'),
-        role: z.string().min(1).describe('Job title and company'),
-        tenure_years: z.number().int().min(1).max(15).describe('Years at company'),
-        personality_traits: z.array(z.string()).min(2).max(5).describe('Key personality traits'),
-        strategic_advantages_they_know: z.array(z.string()).max(3).describe('Strategic advantages'),
-        recent_developments_they_lived_through: z.array(z.string()).max(3).describe('Recent developments'),
-        competitive_context_understanding: z.string().min(1).describe('Competitive landscape understanding')
-      });
+  try {
+    // 🚀 PARALLEL BATCH GENERATION - 5 personas in parallel with maxConcurrency: 5
+    const batchStartTime = Date.now();
+    const personaDataResults = await config.llmProvider?.batchStructured(
+      PersonaDataSchema,
+      'persona_generation',
+      batchPrompts
+    );
+    const batchDuration = ((Date.now() - batchStartTime) / 1000).toFixed(1);
+    console.log(`⏱️  [PERSONA BATCH] Generated ${personaDataResults?.length} personas in ${batchDuration}s (vs ~250s sequential)`);
 
-      const personaData = await config.llmProvider?.generateStructured(
-        PersonaDataSchema,
-        'persona_generation',
-        personaPrompt
-      );
+    if (!personaDataResults || personaDataResults.length === 0) {
+      throw new Error('No response from batch structured output generation');
+    }
 
-      if (!personaData) {
-        throw new Error('No response from structured output generation');
+    // Transform batch results into personas
+    const generatedPersonas: InterviewerPersona[] = personaDataResults.map((personaData, i) => ({
+      id: `${roundTypes[i]}-${i + 1}`,
+      round_number: i + 1,
+      round_type: roundTypes[i],
+      identity: {
+        name: personaData.name,
+        role: personaData.role,
+        tenure_years: personaData.tenure_years,
+        personality_traits: personaData.personality_traits
+      },
+      knowledge_base: {
+        strategic_advantages: personaData.strategic_advantages_they_know || competitiveIntelligence.strategicAdvantages.slice(0, 2),
+        recent_developments: personaData.recent_developments_they_lived_through || competitiveIntelligence.recentDevelopments.slice(0, 2),
+        competitive_context: personaData.competitive_context_understanding || competitiveIntelligence.competitivePositioning
       }
+    }));
 
-      const persona: InterviewerPersona = {
-        id: `${roundType}-${i + 1}`,
-        round_number: i + 1,
-        round_type: roundType,
-        identity: {
-          name: personaData.name,
-          role: personaData.role,
-          tenure_years: personaData.tenure_years,
-          personality_traits: personaData.personality_traits
-        },
-        knowledge_base: {
-          strategic_advantages: personaData.strategic_advantages_they_know || competitiveIntelligence.strategicAdvantages.slice(0, 2),
-          recent_developments: personaData.recent_developments_they_lived_through || competitiveIntelligence.recentDevelopments.slice(0, 2),
-          competitive_context: personaData.competitive_context_understanding || competitiveIntelligence.competitivePositioning
-        }
-      };
+    console.log(`✅ Generated ${generatedPersonas.length} personas`);
 
-      generatedPersonas.push(persona);
+    return {
+      generatedPersonas,
+      currentStep: 'personas_generated',
+      progress: 45
+    };
 
-    } catch (error) {
-      console.error(`Failed to generate persona for ${roundType}:`, error);
+  } catch (error) {
+    console.error('Batch persona generation failed, falling back to sequential with fallbacks:', error);
 
-      // Fallback persona generation if LLM fails
+    // Fallback: Generate personas sequentially with error handling
+    const generatedPersonas: InterviewerPersona[] = [];
+    for (let i = 0; i < roundTypes.length; i++) {
+      const roundType = roundTypes[i];
       const fallbackPersona: InterviewerPersona = {
         id: `${roundType}-${i + 1}`,
         round_number: i + 1,
@@ -390,18 +420,18 @@ Return ONLY a JSON object with this structure:
           competitive_context: competitiveIntelligence.competitivePositioning
         }
       };
-
       generatedPersonas.push(fallbackPersona);
     }
+
+    console.log(`⚠️  Used ${generatedPersonas.length} fallback personas due to batch failure`);
+
+    return {
+      generatedPersonas,
+      currentStep: 'personas_generated',
+      progress: 45,
+      warnings: [...(state.warnings || []), 'Batch persona generation failed, used fallback personas']
+    };
   }
-
-  console.log(`✅ Generated ${generatedPersonas.length} personas`);
-
-  return {
-    generatedPersonas,
-    currentStep: 'personas_generated',
-    progress: 45
-  };
 }
 
 /**
@@ -413,23 +443,41 @@ export async function generateStandardQuestions(
   config: { llmProvider?: LLMProviderService }
 ): Promise<Partial<CurriculumState>> {
 
+  // ⚡ CV DEMO MODE: Skip standard questions (will be generated in generateSingleRound)
+  if (state.mode === 'cv_round_only') {
+    console.log('⚡ [CV DEMO] Skipping standard questions for fast demo');
+    return {
+      standardQuestions: {},
+      currentStep: 'questions_skipped_demo'
+    };
+  }
+
   console.log('❓ Generating standard questions for each persona...');
 
   if (!state.generatedPersonas || state.generatedPersonas.length === 0) {
     throw new Error('No personas found in state');
   }
 
-  const standardQuestionSets: Record<NonTechnicalRoundType, StandardQuestion[]> = {} as any;
+  // Build unified context (same for all personas)
+  const unifiedContextPrompt = buildUnifiedContextPrompt(state.unifiedContext);
 
-  for (const persona of state.generatedPersonas) {
-    // Build personalization context for adaptive question generation
+  // OOTB Structured Output Schema - Define once, reuse for batch
+  const QuestionsArraySchema = z.object({
+    questions: z.array(z.object({
+      text: z.string().min(10).describe('The interview question text'),
+      category: z.enum(['motivation', 'behavioral', 'cultural', 'strategic']).describe('Question category'),
+      follow_ups: z.array(z.string()).min(3).max(4).describe('3-4 follow-up questions creating depth'),
+      time_allocation_minutes: z.number().int().min(3).max(8).describe('Recommended time allocation')
+    })).length(10).describe('Exactly 10 comprehensive interview questions')
+  });
+
+  // Build all prompts for batch processing
+  const batchPrompts = state.generatedPersonas.map((persona) => {
     const personalizationContext = buildPersonalizationContext(state.userProfile, state.cvData, persona.round_type);
     const adaptationStrategy = getAdaptationStrategy(state.userProfile, state.cvData, persona.round_type);
 
-    // Build unified context-aware prompt
-    const unifiedContextPrompt = buildUnifiedContextPrompt(state.unifiedContext);
-
-    const questionsPrompt = `Generate 10 comprehensive interview questions for a ${persona.round_type.replace('_', ' ')} interview round.
+    return {
+      prompt: `Generate 10 comprehensive interview questions for a ${persona.round_type.replace('_', ' ')} interview round.
 
 ${personalizationContext}${adaptationStrategy}
 
@@ -462,54 +510,66 @@ Return ONLY a JSON array with this structure:
     "follow_ups": ["Follow up question 1?", "Follow up question 2?", "Follow up question 3?", "Deeper dive question?"],
     "time_allocation_minutes": 4
   }
-]`;
+]`,
+      systemPrompt: undefined
+    };
+  });
 
-    try {
-      // OOTB Structured Output for Questions - OpenAI-compatible object wrapper
-      const QuestionsArraySchema = z.object({
-        questions: z.array(z.object({
-          text: z.string().min(10).describe('The interview question text'),
-          category: z.enum(['motivation', 'behavioral', 'cultural', 'strategic']).describe('Question category'),
-          follow_ups: z.array(z.string()).min(3).max(4).describe('3-4 follow-up questions creating depth'),
-          time_allocation_minutes: z.number().int().min(3).max(8).describe('Recommended time allocation')
-        })).length(10).describe('Exactly 10 comprehensive interview questions')
-      });
+  try {
+    // 🚀 PARALLEL BATCH GENERATION - 5 question sets in parallel with maxConcurrency: 5
+    const batchStartTime = Date.now();
+    const questionsArrayResults = await config.llmProvider?.batchStructured(
+      QuestionsArraySchema,
+      'question_generation',
+      batchPrompts
+    );
+    const batchDuration = ((Date.now() - batchStartTime) / 1000).toFixed(1);
+    console.log(`⏱️  [QUESTIONS BATCH] Generated ${questionsArrayResults?.length} question sets in ${batchDuration}s (vs ~150s sequential)`);
 
-      const questionsArray = await config.llmProvider?.generateStructured(
-        QuestionsArraySchema,
-        'question_generation',
-        questionsPrompt
-      );
+    if (!questionsArrayResults || questionsArrayResults.length === 0) {
+      throw new Error('No questions generated from batch structured output');
+    }
 
-      if (!questionsArray || !questionsArray.questions || questionsArray.questions.length === 0) {
-        throw new Error('No questions generated from structured output');
-      }
-
-      const questions: StandardQuestion[] = questionsArray.questions.map((q: any, index: number) => ({
-        id: `${persona.round_type}-q${index + 1}`,
+    // Transform batch results into question sets
+    const standardQuestionSets: Record<NonTechnicalRoundType, StandardQuestion[]> = {} as any;
+    questionsArrayResults.forEach((questionsArray, index) => {
+      const persona = state.generatedPersonas![index];
+      const questions: StandardQuestion[] = questionsArray.questions.map((q: any, qIndex: number) => ({
+        id: `${persona.round_type}-q${qIndex + 1}`,
         text: q.text,
         category: q.category as StandardQuestion['category'],
         follow_ups: q.follow_ups || [],
         time_allocation_minutes: q.time_allocation_minutes || 4
       }));
-
       standardQuestionSets[persona.round_type] = questions;
+    });
 
-    } catch (error) {
-      console.error(`Failed to generate questions for ${persona.round_type}:`, error);
+    console.log(`✅ Generated questions for ${Object.keys(standardQuestionSets).length} rounds`);
 
-      // Fallback standard questions
+    return {
+      standardQuestionSets,
+      currentStep: 'questions_generated',
+      progress: 65
+    };
+
+  } catch (error) {
+    console.error('Batch questions generation failed, falling back to fallback questions:', error);
+
+    // Fallback: Use pre-defined questions for all rounds
+    const standardQuestionSets: Record<NonTechnicalRoundType, StandardQuestion[]> = {} as any;
+    for (const persona of state.generatedPersonas) {
       standardQuestionSets[persona.round_type] = getFallbackQuestions(persona.round_type);
     }
+
+    console.log(`⚠️  Used fallback questions for ${Object.keys(standardQuestionSets).length} rounds due to batch failure`);
+
+    return {
+      standardQuestionSets,
+      currentStep: 'questions_generated',
+      progress: 65,
+      warnings: [...(state.warnings || []), 'Batch questions generation failed, used fallback questions']
+    };
   }
-
-  console.log(`✅ Generated questions for ${Object.keys(standardQuestionSets).length} rounds`);
-
-  return {
-    standardQuestionSets,
-    currentStep: 'questions_generated',
-    progress: 65
-  };
 }
 
 /**
@@ -521,6 +581,15 @@ export async function generateCandidatePrep(
   config: { llmProvider?: LLMProviderService }
 ): Promise<Partial<CurriculumState>> {
 
+  // ⚡ CV DEMO MODE: Skip prep guides (will be created in generateSingleRound)
+  if (state.mode === 'cv_round_only') {
+    console.log('⚡ [CV DEMO] Skipping prep guides for fast demo');
+    return {
+      candidatePrepGuides: {},
+      currentStep: 'prep_guides_skipped_demo'
+    };
+  }
+
   console.log('📚 Generating candidate prep guides with competitive intelligence...');
 
   if (!state.competitiveIntelligence || !state.standardQuestionSets || !state.jobData) {
@@ -528,10 +597,35 @@ export async function generateCandidatePrep(
   }
 
   const { competitiveIntelligence, standardQuestionSets, jobData } = state;
-  const candidatePrepGuides: Record<NonTechnicalRoundType, CandidatePrep> = {} as any;
 
-  for (const [roundType, questions] of Object.entries(standardQuestionSets)) {
-    const prepPrompt = `Create candidate preparation guidance for ${roundType.replace('_', ' ')} interview questions.
+  // OOTB Structured Output Schema for prep guides
+  const PrepGuideSchema = z.object({
+    strategic_advantages_talking_points: z.array(z.object({
+      advantage: z.string().describe('Strategic advantage'),
+      how_to_weave_in: z.string().describe('How to naturally mention this'),
+      example_response: z.string().describe('Sample response showing natural integration')
+    })).max(3).describe('Strategic advantages talking points'),
+    recent_developments_talking_points: z.array(z.object({
+      development: z.string().describe('Recent development'),
+      relevance_to_role: z.string().describe('Why this matters for this role'),
+      conversation_starters: z.array(z.string()).max(3).describe('Natural conversation starters')
+    })).max(3).describe('Recent developments talking points'),
+    great_answers_sound_like: z.array(z.string()).max(5).describe('What exceptional answers demonstrate'),
+    company_knowledge_demonstration: z.array(z.string()).max(5).describe('Ways to show deep understanding'),
+    standard_questions_prep: z.array(z.object({
+      question: z.string().describe('Standard interview question'),
+      why_asked: z.string().describe('Why interviewers ask this question'),
+      approach: z.string().describe('How to approach answering'),
+      key_points: z.array(z.string()).max(4).describe('Key points to cover')
+    })).max(5).describe('Standard questions preparation guide')
+  });
+
+  // Build all prompts for batch processing
+  const roundTypes = Object.keys(standardQuestionSets) as NonTechnicalRoundType[];
+  const batchPrompts = roundTypes.map((roundType) => {
+    const questions = standardQuestionSets[roundType];
+    return {
+      prompt: `Create candidate preparation guidance for ${roundType.replace('_', ' ')} interview questions.
 
 JOB CONTEXT:
 - Role: ${jobData.title} at ${jobData.company_name}
@@ -542,73 +636,42 @@ COMPETITIVE INTELLIGENCE:
 - Recent developments: ${competitiveIntelligence.recentDevelopments.join(', ')}
 - Competitive positioning: ${competitiveIntelligence.competitivePositioning}
 
-SAMPLE QUESTIONS:
+SAMPLE QUESTIONS FOR THIS ROUND:
 ${questions.slice(0, 3).map(q => `- ${q.text}`).join('\n')}
 
-Generate preparation guidance that helps candidates:
-1. Use competitive intelligence to give exceptional answers to standard questions
-2. Demonstrate deep company understanding without sounding coached
-3. Connect their experience to the company's unique competitive position
+Generate comprehensive preparation guidance that includes:
+1. Talking points for using competitive intelligence in answers
+2. Recognition training on what great answers look like
+3. Standard questions preparation guide with specific questions, why they're asked, how to approach them, and key points to cover
 
-Return ONLY a JSON object:
-{
-  "strategic_advantages_talking_points": [
-    {
-      "advantage": "First strategic advantage",
-      "how_to_weave_in": "How to naturally mention this in answers",
-      "example_response": "Sample response showing natural integration"
+Focus on helping candidates:
+- Use competitive intelligence to give exceptional answers to standard questions
+- Demonstrate deep company understanding without sounding coached
+- Connect their experience to the company's unique competitive position`,
+      systemPrompt: undefined
+    };
+  });
+
+  try {
+    // 🚀 PARALLEL BATCH GENERATION - 5 prep guides in parallel with maxConcurrency: 5
+    const batchStartTime = Date.now();
+    const prepGuideResults = await config.llmProvider?.batchStructured(
+      PrepGuideSchema,
+      'candidate_prep',
+      batchPrompts
+    );
+    const batchDuration = ((Date.now() - batchStartTime) / 1000).toFixed(1);
+    console.log(`⏱️  [PREP GUIDES BATCH] Generated ${prepGuideResults?.length} prep guides in ${batchDuration}s (vs ~125s sequential)`);
+
+    if (!prepGuideResults || prepGuideResults.length === 0) {
+      throw new Error('No prep guides generated from batch structured output');
     }
-  ],
-  "recent_developments_talking_points": [
-    {
-      "development": "Recent development",
-      "relevance_to_role": "Why this matters for this role",
-      "conversation_starters": ["How to bring this up naturally", "Another way to reference this"]
-    }
-  ],
-  "great_answers_sound_like": ["What exceptional answers demonstrate", "Key indicators of company knowledge"],
-  "company_knowledge_demonstration": ["How to show deep understanding", "Ways to differentiate from other candidates"]
-}`;
 
-    try {
-      const llmProvider = config.llmProvider;
-      const prepResponse = await llmProvider?.generateContent(
-        'candidate_prep',
-        prepPrompt,
-        { format: 'json' }
-      );
-
-      if (!prepResponse) {
-        throw new Error('No response from LLM provider for prep guide');
-      }
-
-      // Safe JSON parsing with markdown code block handling
-      let prepData;
-      try {
-        // Handle markdown-wrapped JSON first (LLMs commonly wrap JSON in code blocks)
-        const jsonMatch = prepResponse.content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-        if (jsonMatch && jsonMatch[1]) {
-          prepData = JSON.parse(jsonMatch[1].trim());
-          console.log(`✅ Successfully extracted JSON from markdown for ${roundType}`);
-        } else {
-          // Fall back to direct parsing if no markdown blocks found
-          prepData = JSON.parse(prepResponse.content);
-          console.log(`✅ Successfully parsed direct JSON for ${roundType}`);
-        }
-      } catch (error) {
-        console.error(`❌ Failed to parse JSON for ${roundType}:`, error.message);
-        console.error(`Response content (first 200 chars):`, prepResponse.content.substring(0, 200));
-        // Fallback structure
-        prepData = {
-          strategic_advantages_talking_points: [],
-          recent_developments_talking_points: [],
-          great_answers_sound_like: [],
-          company_knowledge_demonstration: []
-        };
-        console.log(`Using fallback structure for ${roundType}`);
-      }
-
-      candidatePrepGuides[roundType as NonTechnicalRoundType] = {
+    // Transform batch results into prep guides
+    const candidatePrepGuides: Record<NonTechnicalRoundType, CandidatePrep> = {} as any;
+    prepGuideResults.forEach((prepData, index) => {
+      const roundType = roundTypes[index];
+      candidatePrepGuides[roundType] = {
         ci_talking_points: {
           strategic_advantages: prepData.strategic_advantages_talking_points || [],
           recent_developments: prepData.recent_developments_talking_points || []
@@ -616,27 +679,40 @@ Return ONLY a JSON object:
         recognition_training: {
           what_great_answers_sound_like: prepData.great_answers_sound_like || [],
           how_to_demonstrate_company_knowledge: prepData.company_knowledge_demonstration || []
-        }
+        },
+        standard_questions_prep: prepData.standard_questions_prep || []
       };
+    });
 
-    } catch (error) {
-      console.error(`Failed to generate prep guide for ${roundType}:`, error);
+    console.log(`✅ Generated prep guides for ${Object.keys(candidatePrepGuides).length} rounds`);
 
-      // Fallback prep guide
-      candidatePrepGuides[roundType as NonTechnicalRoundType] = getFallbackPrepGuide(
+    return {
+      candidatePrepGuides,
+      currentStep: 'prep_guides_generated',
+      progress: 80
+    };
+
+  } catch (error) {
+    console.error('Batch prep guides generation failed, falling back to fallback guides:', error);
+
+    // Fallback: Use pre-defined prep guides for all rounds
+    const candidatePrepGuides: Record<NonTechnicalRoundType, CandidatePrep> = {} as any;
+    for (const roundType of roundTypes) {
+      candidatePrepGuides[roundType] = getFallbackPrepGuide(
         competitiveIntelligence,
-        roundType as NonTechnicalRoundType
+        roundType
       );
     }
+
+    console.log(`⚠️  Used fallback prep guides for ${Object.keys(candidatePrepGuides).length} rounds due to batch failure`);
+
+    return {
+      candidatePrepGuides,
+      currentStep: 'prep_guides_generated',
+      progress: 80,
+      warnings: [...(state.warnings || []), 'Batch prep guides generation failed, used fallback guides']
+    };
   }
-
-  console.log(`✅ Generated prep guides for ${Object.keys(candidatePrepGuides).length} rounds`);
-
-  return {
-    candidatePrepGuides,
-    currentStep: 'prep_guides_generated',
-    progress: 80
-  };
 }
 
 // Helper function to extract user context (backwards compatible)
@@ -859,7 +935,27 @@ function getFallbackPrepGuide(
         'Reference specific competitive advantages naturally',
         'Show awareness of recent strategic developments'
       ]
-    }
+    },
+    standard_questions_prep: [
+      {
+        question: 'Tell me about yourself',
+        why_asked: 'To understand your background and communication style',
+        approach: 'Use a structured narrative connecting your experience to this role',
+        key_points: ['Current role', 'Key achievements', 'Why this company', 'Career goals']
+      },
+      {
+        question: 'Why are you interested in this role?',
+        why_asked: 'To assess motivation and company knowledge',
+        approach: 'Connect company advantages to your career goals',
+        key_points: ['Company strengths', 'Role alignment', 'Growth opportunity', 'Cultural fit']
+      },
+      {
+        question: 'What are your strengths?',
+        why_asked: 'To evaluate self-awareness and role fit',
+        approach: 'Highlight strengths relevant to this specific role',
+        key_points: ['Technical skills', 'Soft skills', 'Relevant examples', 'Impact on team']
+      }
+    ]
   };
 }
 

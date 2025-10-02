@@ -31,6 +31,7 @@ interface ConversationConfig {
   onError: (error: Error) => void;
   onTimeUpdate: (context: TimeContext, checkpoint: TimeCheckpoint) => void;
   autoStartTimer?: boolean;
+  durationMinutes?: number; // Total session duration in minutes (default: 30)
 }
 
 interface SessionConfig {
@@ -49,6 +50,7 @@ export function useConversationWithTimeManagement(config: ConversationConfig) {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<number | null>(null);
   const isSessionActiveRef = useRef(false);
+  const durationMs = (config.durationMinutes || 30) * 60 * 1000;
 
   // Start timer for session tracking
   const startTimer = useCallback(() => {
@@ -85,15 +87,15 @@ export function useConversationWithTimeManagement(config: ConversationConfig) {
   // Get current time status
   const getTimeStatus = useCallback((): TimeStatus => {
     if (!startTimeRef.current) {
-      return { elapsed: 0, remaining: 30 * 60 * 1000, progress: 0 };
+      return { elapsed: 0, remaining: durationMs, progress: 0 };
     }
 
     const elapsed = Date.now() - startTimeRef.current;
-    const remaining = Math.max(0, 30 * 60 * 1000 - elapsed);
-    const progress = Math.min(1, elapsed / (30 * 60 * 1000));
+    const remaining = Math.max(0, durationMs - elapsed);
+    const progress = Math.min(1, elapsed / durationMs);
 
     return { elapsed, remaining, progress };
-  }, []);
+  }, [durationMs]);
 
   // Use the ElevenLabs React SDK
   const conversation = useConversation({

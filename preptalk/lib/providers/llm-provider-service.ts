@@ -3,6 +3,7 @@
 // Uses LangChain's withStructuredOutput internally for OOTB, battle-tested implementation
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import { LLMConfig, ModelConfig, getOptimalProvider, calculateEstimatedCost } from '../config/llm-config';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
@@ -17,17 +18,26 @@ import { ChatAnthropic } from '@langchain/anthropic';
 const PROVIDER_MODEL_MAP = {
   gemini: {
     // Map all tasks to appropriate Gemini models
-    default: 'gemini-2.5-flash', // Fast for most tasks
-    quality_evaluation: 'gemini-2.5-pro', // More thorough for evaluation
-    company_research: 'gemini-2.5-pro', // Better for complex research
+    // Note: Flash is more stable during outages (Sep 29 outage: Pro down, Flash worked)
+    default: 'gemini-2.5-flash', // Fast and stable for most tasks
+    quality_evaluation: 'gemini-2.5-flash', // Flash is stable, Pro fallback via provider chain
+    company_research: 'gemini-2.5-flash', // Flash first for stability, Pro fallback
+  },
+  'gemini-pro': {
+    // Gemini Pro models as fallback when Flash fails/overloaded
+    default: 'gemini-2.5-pro',
+    quality_evaluation: 'gemini-2.5-pro',
+    company_research: 'gemini-2.5-pro',
   },
   openai: {
     // Use the configured OpenAI model for all tasks
     default: 'gpt-4.1-mini',
   },
   anthropic: {
-    // Single Claude model for all tasks - using Claude Sonnet 4 with correct model name
-    default: 'claude-sonnet-4-20250514',
+    // Claude Sonnet 4.5 - Latest model (Sept 29, 2025) optimized for coding and complex agents
+    default: 'claude-sonnet-4-5-20250929',
+    unified_context_engine: 'claude-sonnet-4-5-20250929', // Excellent for complex synthesis
+    quality_evaluation: 'claude-sonnet-4-5-20250929', // Superior reasoning
   },
   grok: {
     // Grok model when available
@@ -64,6 +74,7 @@ export interface StructuredGenerationOptions {
   systemPrompt?: string;
   temperature?: number;
   maxRetries?: number;
+  forceProvider?: 'openai' | 'gemini' | 'gemini-pro' | 'anthropic';  // Force specific provider
 }
 
 export interface GenerationResult {
@@ -74,6 +85,7 @@ export interface GenerationResult {
   costCents?: number;
   latencyMs: number;
   cached: boolean;
+  groundingMetadata?: any; // For Google Search/URL grounding citations
 }
 
 export interface ProviderStats {
@@ -92,6 +104,7 @@ export class LLMProviderService {
   private stats: Map<string, ProviderStats>;
   private cache: Map<string, { result: GenerationResult; expiresAt: number }>;
   private rateLimiter: Map<string, { count: number; windowStart: number }>;
+  private geminiGroundingClient?: GoogleGenAI; // New SDK for url_context + google_search
 
   constructor(config: LLMConfig) {
     this.config = config;
@@ -107,11 +120,19 @@ export class LLMProviderService {
   }
 
   private initializeProviders(): void {
-    // Initialize Gemini (primary) - Use GOOGLE_API_KEY as in .env.local
+    // Initialize Gemini (primary) - Flash models for stability
     if (process.env.GOOGLE_API_KEY) {
       try {
-        this.providers.set('gemini', new GoogleGenerativeAI(process.env.GOOGLE_API_KEY));
-        console.log('✅ Gemini provider initialized');
+        const geminiInstance = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+        this.providers.set('gemini', geminiInstance);
+        // Add gemini-pro as separate provider (same instance, different models)
+        // Fallback chain: gemini (flash) → gemini-pro (pro) → openai
+        this.providers.set('gemini-pro', geminiInstance);
+
+        // Initialize new Gemini SDK for url_context + google_search grounding
+        this.geminiGroundingClient = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
+
+        console.log('✅ Gemini provider initialized (Flash + Pro models + Grounding)');
       } catch (error) {
         console.warn('❌ Gemini provider initialization failed:', error.message);
       }
@@ -165,7 +186,19 @@ export class LLMProviderService {
           model: getProviderModel('gemini', task),
           temperature: 0,
           apiKey: process.env.GOOGLE_API_KEY,
-          maxRetries: 3
+          maxRetries: 3,
+          maxConcurrency: 5 // Limit concurrent API calls for rate limiting
+        })
+      },
+      {
+        name: 'gemini-pro',
+        apiKey: process.env.GOOGLE_API_KEY,
+        createModel: (task: string) => new ChatGoogleGenerativeAI({
+          model: getProviderModel('gemini-pro', task),
+          temperature: 0,
+          apiKey: process.env.GOOGLE_API_KEY,
+          maxRetries: 3,
+          maxConcurrency: 5 // Limit concurrent API calls for rate limiting
         })
       },
       {
@@ -175,7 +208,8 @@ export class LLMProviderService {
           model: getProviderModel('openai', task),
           temperature: 0,
           apiKey: process.env.OPENAI_API_KEY,
-          maxRetries: 3
+          maxRetries: 3,
+          maxConcurrency: 5 // Limit concurrent API calls for rate limiting
         })
       },
       {
@@ -185,7 +219,10 @@ export class LLMProviderService {
           model: getProviderModel('anthropic', task),
           temperature: 0,
           anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-          maxRetries: 3
+          maxRetries: 3,
+          maxConcurrency: 5 // Limit concurrent API calls for rate limiting
+          // Note: Don't set topP - Anthropic doesn't accept top_p parameter at all
+          // LangChain will handle omitting it if not set
         })
       }
     ];
@@ -298,19 +335,376 @@ export class LLMProviderService {
         lastError = error as Error;
         this.updateStats(providerName, null, false);
 
-        console.warn(`Provider ${providerName} failed for task ${task}:`, error.message);
+        // Check if this is a 503 Service Unavailable error - fail fast to next provider
+        const is503Error = error.message.includes('503') ||
+                          error.message.includes('Service Unavailable') ||
+                          error.message.includes('overloaded');
+
+        if (is503Error) {
+          console.warn(`Provider ${providerName} returned 503 for task ${task} - failing fast to next provider`);
+        } else {
+          console.warn(`Provider ${providerName} failed for task ${task}:`, error.message);
+        }
 
         // If this is the last provider, throw the error
         if (providerName === providers[providers.length - 1]) {
           break;
         }
 
-        // Wait before trying next provider
-        await this.sleep(this.config.retryDelayMs);
+        // Only wait if not a 503 error (fail-fast for 503)
+        if (!is503Error) {
+          await this.sleep(this.config.retryDelayMs);
+        }
       }
     }
 
     throw new Error(`All providers failed. Last error: ${lastError?.message}`);
+  }
+
+  /**
+   * Generate content from URL using Gemini URL grounding
+   * Falls back to other providers if Gemini fails (though only Gemini supports URL grounding)
+   */
+  async generateContentFromUrl(
+    task: keyof LLMConfig['models'],
+    url: string,
+    prompt: string,
+    options: GenerationOptions = {}
+  ): Promise<GenerationResult> {
+    const modelConfig = this.config.models[task];
+    let providers = [modelConfig.provider, ...this.config.fallbackProviders];
+
+    // Use optimal provider selection
+    const optimalProvider = getOptimalProvider(task, this.config);
+    providers = [optimalProvider, ...providers.filter(p => p !== optimalProvider)];
+
+    // Remove duplicates
+    providers = [...new Set(providers)];
+
+    // Filter to only available providers
+    providers = providers.filter(p => this.providers.has(p));
+
+    if (providers.length === 0) {
+      throw new Error(`No available providers for task ${task}`);
+    }
+
+    let lastError: Error | null = null;
+
+    for (const providerName of providers) {
+      try {
+        // Check rate limits
+        if (!(await this.checkRateLimit(providerName))) {
+          throw new Error(`Rate limit exceeded for provider: ${providerName}`);
+        }
+
+        let result: any;
+        let tokensUsed = 0;
+
+        // Only Gemini supports URL grounding via fileData
+        if (providerName === 'gemini' || providerName === 'gemini-pro') {
+          const provider = this.providers.get(providerName);
+          const providerModel = getProviderModel(providerName, task);
+
+          result = await this.callGeminiWithUrl(
+            provider,
+            { ...modelConfig, model: providerModel },
+            url,
+            prompt,
+            options
+          );
+          tokensUsed = result.response?.usageMetadata?.totalTokenCount || 0;
+
+          const latencyMs = 0; // Not tracking for now
+          const costCents = this.config.costTracking ?
+            calculateEstimatedCost(providerName as any, tokensUsed) * 100 : 0;
+
+          const generationResult: GenerationResult = {
+            content: result.response?.text() || '',
+            provider: providerName,
+            model: providerModel,
+            tokensUsed,
+            costCents,
+            latencyMs,
+            cached: false
+          };
+
+          this.updateStats(providerName, generationResult, true);
+          return generationResult;
+
+        } else {
+          // For non-Gemini providers, fall back to regular text-based extraction
+          // This won't actually fetch the URL content but will use the prompt
+          console.warn(`${providerName} does not support URL grounding, using text-based fallback`);
+          result = await this.callProvider(providerName, modelConfig, `${prompt}\n\nURL: ${url}`, options, task);
+          this.updateStats(providerName, result, true);
+          return result;
+        }
+
+      } catch (error) {
+        lastError = error as Error;
+        this.updateStats(providerName, null, false);
+
+        // Check if this is a 503 Service Unavailable error - fail fast
+        const errorMsg = error.message;
+        const is503Error = errorMsg.includes('503') ||
+                          errorMsg.includes('Service Unavailable') ||
+                          errorMsg.includes('overloaded');
+
+        if (is503Error) {
+          console.warn(`Provider ${providerName} returned 503 for URL task ${task} - failing fast to next provider`);
+        } else {
+          console.warn(`Provider ${providerName} failed for URL task ${task}:`, errorMsg);
+        }
+
+        // If this is the last provider, throw the error
+        if (providerName === providers[providers.length - 1]) {
+          break;
+        }
+
+        // Only wait if not a 503 error (fail-fast for 503)
+        if (!is503Error) {
+          await this.sleep(this.config.retryDelayMs);
+        }
+      }
+    }
+
+    throw new Error(`All providers failed for URL task. Last error: ${lastError?.message}`);
+  }
+
+  /**
+   * Generate content using Gemini URL Context grounding
+   * Gemini fetches URLs server-side (up to 20 URLs, 34MB each)
+   * Returns TEXT with citations - use generateStructured() afterwards for JSON
+   */
+  async generateWithUrlContext(
+    task: keyof LLMConfig['models'],
+    prompt: string,
+    urls: string[],
+    options: GenerationOptions = {}
+  ): Promise<GenerationResult> {
+    if (!this.geminiGroundingClient) {
+      throw new Error('Gemini grounding client not initialized');
+    }
+
+    if (urls.length > 20) {
+      console.warn(`URL limit exceeded (${urls.length}), trimming to first 20`);
+      urls = urls.slice(0, 20);
+    }
+
+    // Force text output for grounding (tools don't support JSON mode)
+    const textOptions = { ...options, format: 'text' as const };
+
+    return this.callGroundingMethod(
+      task,
+      prompt,
+      textOptions,
+      { urlContext: {} },
+      urls
+    );
+  }
+
+  /**
+   * Generate content using Google Search grounding
+   * Searches Google and provides structured citations
+   */
+  async generateWithGoogleSearch(
+    task: keyof LLMConfig['models'],
+    prompt: string,
+    options: GenerationOptions = {}
+  ): Promise<GenerationResult> {
+    if (!this.geminiGroundingClient) {
+      throw new Error('Gemini grounding client not initialized');
+    }
+
+    return this.callGroundingMethod(
+      task,
+      prompt,
+      options,
+      { googleSearch: {} }
+    );
+  }
+
+  /**
+   * Generate content using BOTH URL Context + Google Search grounding
+   * Most comprehensive: fetches specific URLs + searches for additional context
+   * Returns TEXT with citations - use generateStructured() afterwards for JSON
+   */
+  async generateWithCombinedGrounding(
+    task: keyof LLMConfig['models'],
+    prompt: string,
+    urls: string[],
+    options: GenerationOptions = {}
+  ): Promise<GenerationResult> {
+    if (!this.geminiGroundingClient) {
+      throw new Error('Gemini grounding client not initialized');
+    }
+
+    if (urls.length > 20) {
+      console.warn(`URL limit exceeded (${urls.length}), trimming to first 20`);
+      urls = urls.slice(0, 20);
+    }
+
+    // Force text output for grounding (tools don't support JSON mode)
+    const textOptions = { ...options, format: 'text' as const };
+
+    return this.callGroundingMethod(
+      task,
+      prompt,
+      textOptions,
+      { urlContext: {}, googleSearch: {} },
+      urls
+    );
+  }
+
+  /**
+   * Shared helper for all grounding methods (DRY)
+   * Handles fail-fast, fallback chain, and metadata extraction
+   */
+  private async callGroundingMethod(
+    task: keyof LLMConfig['models'],
+    prompt: string,
+    options: GenerationOptions,
+    tools: { urlContext?: {}; googleSearch?: {} },
+    urls?: string[]
+  ): Promise<GenerationResult> {
+    const modelConfig = this.config.models[task];
+    let providers = ['gemini', 'gemini-pro']; // Only Gemini supports grounding
+
+    // Filter to only available providers
+    providers = providers.filter(p => this.providers.has(p));
+
+    if (providers.length === 0) {
+      throw new Error('No Gemini provider available for grounding');
+    }
+
+    let lastError: Error | null = null;
+    const startTime = Date.now();
+
+    for (const providerName of providers) {
+      try {
+        // Check rate limits
+        if (!(await this.checkRateLimit(providerName))) {
+          throw new Error(`Rate limit exceeded for provider: ${providerName}`);
+        }
+
+        const providerModel = getProviderModel(providerName, task);
+
+        // Build prompt with URLs if provided
+        const fullPrompt = urls && urls.length > 0
+          ? `${prompt}\n\nURLs to analyze:\n${urls.map((u, i) => `${i + 1}. ${u}`).join('\n')}`
+          : prompt;
+
+        // Build config - note: tool use doesn't support responseMimeType='application/json'
+        const configParams: any = {
+          tools: [tools],
+          temperature: options.temperature || modelConfig.temperature,
+          maxOutputTokens: modelConfig.maxTokens,
+          topP: modelConfig.topP
+        };
+
+        // Add system instruction if provided
+        if (options.systemPrompt) {
+          configParams.systemInstruction = { parts: [{ text: options.systemPrompt }] };
+        }
+
+        // Call new Gemini SDK with grounding tools
+        const response = await this.geminiGroundingClient!.models.generateContent({
+          model: providerModel,
+          contents: [{
+            role: 'user',
+            parts: [{ text: fullPrompt }]
+          }],
+          config: configParams
+        });
+
+        const candidate = response.candidates?.[0];
+        if (!candidate) {
+          throw new Error('No candidate returned from Gemini grounding');
+        }
+
+        // Extract text from all parts (some might be function calls, some text)
+        const textParts = candidate.content?.parts?.filter((p: any) => p.text) || [];
+        const content = textParts.map((p: any) => p.text).join('\n') || '';
+        const tokensUsed = response.usageMetadata?.totalTokenCount || 0;
+        const latencyMs = Date.now() - startTime;
+        const costCents = this.config.costTracking ?
+          calculateEstimatedCost(providerName as any, tokensUsed) * 100 : 0;
+
+        const result: GenerationResult = {
+          content,
+          provider: providerName,
+          model: providerModel,
+          tokensUsed,
+          costCents,
+          latencyMs,
+          cached: false,
+          groundingMetadata: candidate.groundingMetadata || response.groundingMetadata
+        };
+
+        this.updateStats(providerName, result, true);
+        return result;
+
+      } catch (error) {
+        lastError = error as Error;
+        this.updateStats(providerName, null, false);
+
+        // Check if this is a 503 Service Unavailable error - fail fast
+        const errorMsg = error.message;
+        const is503Error = errorMsg.includes('503') ||
+                          errorMsg.includes('Service Unavailable') ||
+                          errorMsg.includes('overloaded');
+
+        if (is503Error) {
+          console.warn(`Provider ${providerName} returned 503 for grounding task ${task} - failing fast to next provider`);
+        } else {
+          console.warn(`Provider ${providerName} failed for grounding task ${task}:`, errorMsg);
+        }
+
+        // If this is the last provider, throw the error
+        if (providerName === providers[providers.length - 1]) {
+          break;
+        }
+
+        // Only wait if not a 503 error (fail-fast for 503)
+        if (!is503Error) {
+          await this.sleep(this.config.retryDelayMs);
+        }
+      }
+    }
+
+    // Final fallback: If all Gemini providers failed and url_context was requested, try Cheerio scraping
+    if (tools.urlContext && urls && urls.length > 0) {
+      console.warn('All Gemini providers failed for url_context, falling back to Cheerio scraping');
+      try {
+        // Import cheerio and axios dynamically
+        const axios = (await import('axios')).default;
+        const cheerio = await import('cheerio');
+
+        // Fetch and parse first URL (limit to 1 for fallback)
+        const response = await axios.get(urls[0], {
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PrepTalk/1.0)' },
+          timeout: 10000
+        });
+
+        const $ = cheerio.load(response.data);
+        $('script, style, noscript').remove();
+        const text = $('body').text().replace(/\s+/g, ' ').trim().substring(0, 50000);
+
+        const fallbackPrompt = `${prompt}\n\nExtracted content from ${urls[0]}:\n\n${text}`;
+
+        // Use regular generateContent with OpenAI fallback
+        const fallbackResult = await this.generateContent(task, fallbackPrompt, { format: 'text' });
+
+        return {
+          ...fallbackResult,
+          groundingMetadata: { note: 'Cheerio scraping fallback - Gemini unavailable' }
+        };
+      } catch (cheerioError) {
+        console.error('Cheerio fallback also failed:', cheerioError.message);
+      }
+    }
+
+    throw new Error(`All providers failed for grounding task. Last error: ${lastError?.message}`);
   }
 
   /**
@@ -323,6 +717,39 @@ export class LLMProviderService {
     prompt: string,
     options: StructuredGenerationOptions = {}
   ): Promise<T> {
+    const callStartTime = Date.now();
+    const callId = Math.random().toString(36).substring(7);
+
+    // If forceProvider is specified, use only that provider
+    if (options.forceProvider) {
+      const forcedProvider = options.forceProvider;
+      console.log(`🎯 [CALL-${callId}] Forcing provider: ${forcedProvider} for structured generation`);
+
+      const providerInfo = this.langchainProviders.get(forcedProvider);
+      if (!providerInfo?.available) {
+        throw new Error(`Forced provider ${forcedProvider} is not available. Reason: ${providerInfo?.reason || 'unknown'}`);
+      }
+
+      try {
+        const providerStartTime = Date.now();
+        const result = await this.executeStructuredGeneration(
+          forcedProvider,
+          schema,
+          task,
+          prompt,
+          options
+        );
+        const providerDuration = Date.now() - providerStartTime;
+        const callDuration = Date.now() - callStartTime;
+        console.log(`✅ [CALL-${callId}] Forced ${forcedProvider} completed in ${providerDuration}ms (total: ${callDuration}ms)`);
+        return result;
+      } catch (error) {
+        const callDuration = Date.now() - callStartTime;
+        console.error(`❌ [CALL-${callId}] Forced provider failed after ${callDuration}ms`);
+        throw new Error(`Forced provider ${forcedProvider} failed: ${error.message}`);
+      }
+    }
+
     const providerOrder = this.getAvailableProviderOrder(task);
 
     if (providerOrder.length === 0) {
@@ -331,34 +758,12 @@ export class LLMProviderService {
 
     let lastError: Error | null = null;
 
-    // Research finding: OpenAI excels with complex schemas (100% accuracy)
-    // Try OpenAI first for complex structured outputs
-    if (providerOrder.includes('openai')) {
+    // Respect task-specific provider order from getOptimalProvider()
+    // This ensures unified_context_engine uses Anthropic, etc.
+    for (const providerName of providerOrder) {
       try {
-        console.log(`🔄 Attempting OpenAI (optimal for complex schemas)...`);
-
-        const result = await this.executeStructuredGeneration(
-          'openai',
-          schema,
-          task,
-          prompt,
-          { ...options, temperature: 0.1 } // Lower temperature for accuracy
-        );
-
-        console.log(`✅ Structured output successful with OpenAI`);
-        return result;
-
-      } catch (error) {
-        lastError = error as Error;
-        console.warn(`❌ OpenAI failed for structured output:`, (error as Error).message);
-      }
-    }
-
-    // Fallback to other providers
-    const otherProviders = providerOrder.filter(p => p !== 'openai');
-    for (const providerName of otherProviders) {
-      try {
-        console.log(`🔄 Fallback to ${providerName}...`);
+        const providerStartTime = Date.now();
+        console.log(`🔄 [CALL-${callId}] Attempting ${providerName} for structured output (task: ${task})...`);
 
         const result = await this.executeStructuredGeneration(
           providerName,
@@ -368,12 +773,138 @@ export class LLMProviderService {
           options
         );
 
-        console.log(`✅ Structured output successful with ${providerName}`);
+        const providerDuration = Date.now() - providerStartTime;
+        const callDuration = Date.now() - callStartTime;
+        console.log(`✅ [CALL-${callId}] Structured output successful with ${providerName} in ${providerDuration}ms (total: ${callDuration}ms)`);
         return result;
 
       } catch (error) {
         lastError = error as Error;
-        console.warn(`❌ ${providerName} failed for structured output:`, (error as Error).message);
+        const providerDuration = Date.now() - callStartTime;
+        const errorMsg = (error as Error).message;
+        const is503Error = errorMsg.includes('503') || errorMsg.includes('Service Unavailable') || errorMsg.includes('overloaded');
+
+        if (is503Error) {
+          console.warn(`❌ [CALL-${callId}] ${providerName} returned 503 after ${providerDuration}ms - failing fast to next provider`);
+        } else {
+          console.warn(`❌ [CALL-${callId}] ${providerName} failed after ${providerDuration}ms:`, errorMsg.substring(0, 100));
+        }
+
+        // Only wait if not a 503 error (fail-fast for 503)
+        if (!is503Error && providerOrder.indexOf(providerName) < providerOrder.length - 1) {
+          await this.sleep(this.config.retryDelayMs);
+        }
+      }
+    }
+
+    // All providers failed
+    const callDuration = Date.now() - callStartTime;
+    console.error(`❌ [CALL-${callId}] All providers failed after ${callDuration}ms (${(callDuration/1000).toFixed(1)}s)`);
+    const availableProviders = providerOrder.join(', ');
+    throw new Error(
+      `All available providers failed for structured output (tried: ${availableProviders}). ` +
+      `Last error: ${lastError?.message}. Check API keys and provider configurations.`
+    );
+  }
+
+  /**
+   * Batch Structured Output Generation - OOTB LangChain Feature
+   * Uses LangChain's .batch() with maxConcurrency for parallel processing
+   * Ideal for independent operations like generating multiple personas/questions
+   */
+  async batchStructured<T>(
+    schema: z.ZodSchema<T>,
+    task: keyof LLMConfig['models'],
+    prompts: Array<{ prompt: string; systemPrompt?: string }>,
+    options: StructuredGenerationOptions = {}
+  ): Promise<T[]> {
+    const batchStartTime = Date.now();
+    const batchId = Math.random().toString(36).substring(7);
+
+    console.log(`\n🎯 [BATCH-${batchId}] Starting batch generation`);
+    console.log(`   Task: ${task}`);
+    console.log(`   Batch size: ${prompts.length}`);
+
+    const providerOrder = this.getAvailableProviderOrder(task);
+    console.log(`   Provider order: ${providerOrder.join(' → ')}`);
+
+    if (providerOrder.length === 0) {
+      throw new Error('No LangChain providers available for batch structured outputs. Check API keys.');
+    }
+
+    let lastError: Error | null = null;
+    let attempts = 0;
+
+    // Try OpenAI first (optimal for complex schemas)
+    if (providerOrder.includes('openai')) {
+      try {
+        attempts++;
+        const providerStartTime = Date.now();
+
+        console.log(`🔄 [BATCH-${batchId}] Attempting openai (attempt ${attempts})...`);
+
+        const results = await this.executeBatchStructuredGeneration(
+          'openai',
+          schema,
+          task,
+          prompts,
+          { ...options, temperature: 0.1 },
+          batchId
+        );
+
+        const providerDuration = Date.now() - providerStartTime;
+        console.log(`✅ [BATCH-${batchId}] openai succeeded in ${providerDuration}ms (${(providerDuration/1000).toFixed(1)}s)`);
+
+        const batchDuration = Date.now() - batchStartTime;
+        console.log(`\n✅ [BATCH-${batchId}] Completed in ${batchDuration}ms (${(batchDuration/1000).toFixed(1)}s)`);
+        console.log(`   Average per item: ${(batchDuration/prompts.length).toFixed(0)}ms`);
+
+        return results;
+
+      } catch (error) {
+        lastError = error as Error;
+        const providerDuration = Date.now() - batchStartTime;
+        console.warn(`❌ [BATCH-${batchId}] openai failed after ${providerDuration}ms (${(providerDuration/1000).toFixed(1)}s)`);
+        console.warn(`   Error: ${(error as Error).message?.substring(0, 100)}`);
+      }
+    }
+
+    // Fallback to other providers
+    const otherProviders = providerOrder.filter(p => p !== 'openai');
+    for (const providerName of otherProviders) {
+      try {
+        attempts++;
+        const providerStartTime = Date.now();
+
+        if (lastError) {
+          console.log(`🔄 [BATCH-${batchId}] Trying next provider (${attempts} attempts so far)`);
+          console.log(`   Last error: ${lastError.message?.substring(0, 100)}`);
+        }
+        console.log(`🔄 [BATCH-${batchId}] Attempting ${providerName}...`);
+
+        const results = await this.executeBatchStructuredGeneration(
+          providerName,
+          schema,
+          task,
+          prompts,
+          options,
+          batchId
+        );
+
+        const providerDuration = Date.now() - providerStartTime;
+        console.log(`✅ [BATCH-${batchId}] ${providerName} succeeded in ${providerDuration}ms (${(providerDuration/1000).toFixed(1)}s)`);
+
+        const batchDuration = Date.now() - batchStartTime;
+        console.log(`\n✅ [BATCH-${batchId}] Completed in ${batchDuration}ms (${(batchDuration/1000).toFixed(1)}s)`);
+        console.log(`   Average per item: ${(batchDuration/prompts.length).toFixed(0)}ms`);
+
+        return results;
+
+      } catch (error) {
+        lastError = error as Error;
+        const providerDuration = Date.now() - batchStartTime;
+        console.warn(`❌ [BATCH-${batchId}] ${providerName} failed after ${providerDuration}ms (${(providerDuration/1000).toFixed(1)}s)`);
+        console.warn(`   Error: ${(error as Error).message?.substring(0, 100)}`);
 
         // Wait before trying next provider
         await this.sleep(this.config.retryDelayMs);
@@ -381,9 +912,13 @@ export class LLMProviderService {
     }
 
     // All providers failed
+    const batchDuration = Date.now() - batchStartTime;
+    console.error(`\n❌ [BATCH-${batchId}] All providers failed after ${batchDuration}ms (${(batchDuration/1000).toFixed(1)}s)`);
+    console.error(`   Total attempts: ${attempts}`);
+
     const availableProviders = providerOrder.join(', ');
     throw new Error(
-      `All available providers failed for structured output (tried: ${availableProviders}). ` +
+      `All available providers failed for batch structured output (tried: ${availableProviders}). ` +
       `Last error: ${lastError?.message}. Check API keys and provider configurations.`
     );
   }
@@ -406,12 +941,18 @@ export class LLMProviderService {
     }
 
     // Create LangChain model instance
-    const llmModel = provider.langchainModel(task);
+    let llmModel = provider.langchainModel(task);
 
     // Configure temperature if provided
     if (options.temperature !== undefined) {
       llmModel.temperature = options.temperature;
     }
+
+    // KNOWN ISSUE: @langchain/anthropic v0.3.28 has a bug with withStructuredOutput()
+    // It sends top_p: -1 which Anthropic API rejects with 400 error
+    // The system will gracefully fallback to Gemini for structured outputs
+    // TODO: Update to @langchain/anthropic v0.4.x when available to fix this
+    // For now, Anthropic is correctly selected but falls back to Gemini
 
     // Create structured model using LangChain's OOTB method
     // Following best practices: https://python.langchain.com/docs/how_to/structured_output/
@@ -432,6 +973,81 @@ export class LLMProviderService {
 
     // Additional validation to ensure type safety
     return schema.parse(result);
+  }
+
+  /**
+   * Execute batch structured generation with a specific provider
+   * Uses LangChain's .batch() with maxConcurrency from model configuration
+   */
+  private async executeBatchStructuredGeneration<T>(
+    providerName: string,
+    schema: z.ZodSchema<T>,
+    task: keyof LLMConfig['models'],
+    prompts: Array<{ prompt: string; systemPrompt?: string }>,
+    options: StructuredGenerationOptions,
+    batchId?: string
+  ): Promise<T[]> {
+    const logPrefix = batchId ? `[BATCH-${batchId}]` : '[BATCH]';
+    const provider = this.langchainProviders.get(providerName);
+
+    if (!provider || !provider.available || !provider.langchainModel) {
+      throw new Error(`Provider ${providerName} not available: ${provider?.reason || 'unknown'}`);
+    }
+
+    // Create LangChain model instance
+    const llmModel = provider.langchainModel(task);
+
+    // Configure temperature if provided
+    if (options.temperature !== undefined) {
+      llmModel.temperature = options.temperature;
+    }
+
+    console.log(`📋 ${logPrefix} Configuring ${providerName} with maxConcurrency: ${llmModel.maxConcurrency || 'default'}`);
+
+    // Create structured model using LangChain's OOTB method
+    const structuredModelStartTime = Date.now();
+    const structuredModel = llmModel.withStructuredOutput(schema, {
+      name: `${task}_batch_structured_output`,
+      includeRaw: false
+    });
+    const structuredModelDuration = Date.now() - structuredModelStartTime;
+    console.log(`📊 ${logPrefix} Structured model created in ${structuredModelDuration}ms`);
+
+    // Build messages arrays for each prompt
+    const messagesBuildStartTime = Date.now();
+    const messagesBatch = prompts.map(({ prompt, systemPrompt }) => {
+      const messages = [];
+      if (systemPrompt || options.systemPrompt) {
+        messages.push(['system', systemPrompt || options.systemPrompt]);
+      }
+      messages.push(['human', prompt]);
+      return messages;
+    });
+    const messagesBuildDuration = Date.now() - messagesBuildStartTime;
+    console.log(`📊 ${logPrefix} Messages batch built in ${messagesBuildDuration}ms (${prompts.length} items)`);
+
+    // Use LangChain's OOTB batch method with maxConcurrency
+    // maxConcurrency is already configured in the model (set to 5)
+    const maxConcurrency = llmModel.maxConcurrency || 5;
+    console.log(`🚀 ${logPrefix} Starting LangChain .batch() call...`);
+    const batchCallStartTime = Date.now();
+    const results = await structuredModel.batch(messagesBatch, {
+      maxConcurrency
+    });
+    const batchCallDuration = Date.now() - batchCallStartTime;
+
+    console.log(`📊 ${logPrefix} LangChain .batch() completed in ${batchCallDuration}ms (${(batchCallDuration/1000).toFixed(1)}s)`);
+    console.log(`   Items: ${messagesBatch.length}`);
+    console.log(`   Concurrency: ${maxConcurrency}`);
+    console.log(`   Avg per item: ${(batchCallDuration/messagesBatch.length).toFixed(0)}ms (${(batchCallDuration/messagesBatch.length/1000).toFixed(1)}s)`);
+
+    // Validate and parse all results
+    const parseStartTime = Date.now();
+    const parsedResults = results.map(result => schema.parse(result));
+    const parseDuration = Date.now() - parseStartTime;
+    console.log(`📊 ${logPrefix} Schema validation completed in ${parseDuration}ms`);
+
+    return parsedResults;
   }
 
   /**
@@ -480,6 +1096,7 @@ export class LLMProviderService {
 
     switch (providerName) {
       case 'gemini':
+      case 'gemini-pro':
         result = await this.callGemini(provider, { ...config, model: providerModel }, prompt, options);
         tokensUsed = result.response?.usageMetadata?.totalTokenCount || 0;
         break;
@@ -526,6 +1143,53 @@ export class LLMProviderService {
     });
 
     return await model.generateContent(prompt);
+  }
+
+  /**
+   * Call Gemini with URL content
+   * Fetches URL content first, then passes to Gemini for processing
+   * (Gemini's fileUri only works with uploaded files, not direct URLs)
+   */
+  private async callGeminiWithUrl(provider: any, config: ModelConfig, url: string, prompt: string, options: GenerationOptions) {
+    // Import axios and cheerio
+    const axios = await import('axios');
+    const cheerio = await import('cheerio');
+
+    // Fetch URL content
+    const response = await axios.default.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; PrepTalk/1.0; +https://preptalk.ai)'
+      },
+      timeout: 10000 // 10 second timeout
+    });
+
+    // Parse HTML and extract text content
+    const $ = cheerio.load(response.data);
+
+    // Remove script and style elements
+    $('script, style, noscript').remove();
+
+    // Extract text content, focusing on main content areas
+    const text = $('body').text()
+      .replace(/\s+/g, ' ') // Normalize whitespace
+      .trim()
+      .substring(0, 50000); // Limit to 50k chars to avoid token limits
+
+    // Create model
+    const model = provider.getGenerativeModel({
+      model: config.model,
+      generationConfig: {
+        temperature: config.temperature,
+        maxOutputTokens: config.maxTokens,
+        topP: config.topP,
+        responseMimeType: options.format === 'json' ? 'application/json' : 'text/plain'
+      },
+      systemInstruction: options.systemPrompt
+    });
+
+    // Pass extracted content to Gemini
+    const fullPrompt = `${prompt}\n\nExtracted content from URL (${url}):\n\n${text}`;
+    return await model.generateContent(fullPrompt);
   }
 
   private async callOpenAI(provider: any, config: ModelConfig, prompt: string, options: GenerationOptions) {
@@ -575,6 +1239,7 @@ export class LLMProviderService {
   private extractContent(result: any, provider: string): string {
     switch (provider) {
       case 'gemini':
+      case 'gemini-pro':
         return result.response?.text() || '';
       case 'openai':
         return result.choices?.[0]?.message?.content || '';

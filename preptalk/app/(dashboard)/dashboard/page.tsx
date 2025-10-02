@@ -1,4 +1,5 @@
 import { getDashboardData, type JourneyRound, type QuestionGuide } from '@/lib/dashboard/data';
+import { CurriculumSelector } from '@/components/dashboard/curriculum-selector';
 import Link from 'next/link';
 import { Mic } from 'lucide-react';
 
@@ -66,8 +67,13 @@ function formatMissingHint(code: string): string | null {
 
 export const dynamic = 'force-dynamic';
 
-export default async function DashboardOverviewPage() {
-  const { user, journey, questionGuides, hasOwnCurriculum, metadata } = await getDashboardData();
+export default async function DashboardOverviewPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ curriculumId?: string }>;
+}) {
+  const params = await searchParams;
+  const { user, journey, questionGuides, hasOwnCurriculum, metadata, allCurricula, selectedCurriculumId } = await getDashboardData(params.curriculumId);
 
   const firstName = user.fullName.split(' ')[0] || 'there';
   const totalRounds = journey.length;
@@ -124,25 +130,12 @@ export default async function DashboardOverviewPage() {
             </div>
 
             {hasOwnCurriculum ? (
-              <div className="w-full max-w-xs rounded-lg border border-blue-100 bg-blue-50 p-6 text-blue-900">
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-600">
-                  Applying to
-                </p>
-                <p className="mt-4 text-2xl font-semibold text-blue-900">
-                  {user.companyName ?? 'Your target company'}
-                </p>
-                {user.jobTitle && (
-                  <p className="mt-1 text-sm font-medium text-blue-800">{user.jobTitle}</p>
-                )}
-                <p className="mt-3 text-sm leading-relaxed text-blue-800">
-                  Keep tailoring your narrative to the product vision and the personas on the other side of the table.
-                </p>
-                {metadata.source !== 'supabase' && fallbackHints.length > 0 && (
-                  <p className="mt-4 text-xs text-blue-700">
-                    Using fallback for: {fallbackHints.join(', ')}
-                  </p>
-                )}
-              </div>
+              <CurriculumSelector
+                curricula={allCurricula}
+                selectedId={selectedCurriculumId}
+                currentCompany={user.companyName}
+                currentJobTitle={user.jobTitle}
+              />
             ) : (
               <div className="w-full max-w-xs rounded-lg border border-green-100 bg-gradient-to-br from-green-50 to-blue-50 p-6">
                 <div className="space-y-4">
@@ -305,11 +298,49 @@ export default async function DashboardOverviewPage() {
 }
 
 function JourneyCard({ round, isLocked }: { round: JourneyRound; isLocked: boolean }) {
+  const isCurrent = round.status === 'current';
+  const isComplete = round.status === 'complete';
+
+  // Enhanced styling based on status
+  const cardBaseClasses = `
+    relative flex h-full flex-col gap-4 rounded-xl border p-5
+    transition-all duration-300 ease-out
+    ${isLocked ? 'opacity-70' : 'opacity-100'}
+  `;
+
+  const cardStatusClasses =
+    isCurrent
+      ? 'border-blue-400 bg-gradient-to-br from-blue-50 via-white to-blue-50/30 shadow-lg shadow-blue-100/50 ring-2 ring-blue-200/50 scale-[1.02] hover:shadow-xl hover:shadow-blue-100/60 hover:scale-[1.03]'
+      : isComplete
+      ? 'border-green-200 bg-gradient-to-br from-green-50/50 to-white hover:shadow-md hover:border-green-300'
+      : 'border-gray-200 bg-white hover:shadow-md hover:border-gray-300';
+
+  const cardClasses = `${cardBaseClasses} ${cardStatusClasses}`;
+
+  // Left accent border
+  const accentBorder = isCurrent
+    ? 'before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-gradient-to-b before:from-blue-400 before:via-blue-500 before:to-blue-600 before:rounded-l-xl'
+    : isComplete
+    ? 'before:absolute before:left-0 before:top-0 before:bottom-0 before:w-1 before:bg-gradient-to-b before:from-green-400 before:via-green-500 before:to-green-600 before:rounded-l-xl'
+    : '';
+
+  const CardWrapper = !isLocked && round.curriculumId && round.roundNumber ? Link : 'article';
+  const wrapperProps = CardWrapper === Link
+    ? {
+        href: `/interview/voice?curriculumId=${round.curriculumId}&roundNumber=${round.roundNumber}`,
+        className: `${cardClasses} ${accentBorder} cursor-pointer focus:outline-none focus:ring-4 focus:ring-blue-400/30 group`,
+        role: 'button',
+        'aria-label': `Practice ${round.title} interview with ${round.persona}`,
+      }
+    : {
+        className: `${cardClasses} ${accentBorder}`,
+      };
+
   return (
-    <article className={`relative flex h-full flex-col gap-4 rounded-lg border border-gray-200 bg-white p-5 shadow-sm ${isLocked ? 'opacity-70' : ''}`}>
+    <CardWrapper {...wrapperProps as any}>
       {isLocked && (
-        <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-gray-900/5 backdrop-blur-[1px]">
-          <div className="flex flex-col items-center gap-2 rounded-lg bg-white px-4 py-3 shadow-lg">
+        <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-gray-900/5 backdrop-blur-[1px] z-10">
+          <div className="flex flex-col items-center gap-2 rounded-lg bg-white px-4 py-3 shadow-xl border border-gray-200">
             <svg className="h-6 w-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
             </svg>
@@ -318,38 +349,136 @@ function JourneyCard({ round, isLocked }: { round: JourneyRound; isLocked: boole
         </div>
       )}
 
-      <header className="flex items-center gap-4">
-        <div className={`flex h-10 w-10 items-center justify-center rounded-full border text-sm font-semibold ${markerTone[round.status]}`}>
-          {round.status === 'complete' ? '✓' : round.order}
+      {/* Glow effect for current round */}
+      {isCurrent && !isLocked && (
+        <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-blue-400/10 via-transparent to-blue-500/5 pointer-events-none animate-pulse"
+             style={{ animationDuration: '3s' }} />
+      )}
+
+      <header className="flex items-center gap-4 relative z-[1]">
+        {/* Progress ring badge */}
+        <div className="relative">
+          {isCurrent && (
+            <svg className="absolute -inset-1 w-12 h-12 -rotate-90">
+              <circle
+                cx="24"
+                cy="24"
+                r="22"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="text-blue-200"
+                strokeDasharray="138"
+                strokeDashoffset="0"
+              />
+              <circle
+                cx="24"
+                cy="24"
+                r="22"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                className="text-blue-500 transition-all duration-500"
+                strokeDasharray="138"
+                strokeDashoffset="34"
+                strokeLinecap="round"
+              />
+            </svg>
+          )}
+          <div className={`
+            flex h-10 w-10 items-center justify-center rounded-full border-2 text-sm font-bold
+            transition-all duration-300
+            ${isCurrent ? 'border-blue-500 bg-blue-500 text-white shadow-md shadow-blue-200' : ''}
+            ${isComplete ? 'border-green-500 bg-green-500 text-white shadow-sm shadow-green-200' : ''}
+            ${!isCurrent && !isComplete ? 'border-gray-300 bg-gray-50 text-gray-600' : ''}
+            ${!isLocked && CardWrapper === Link ? 'group-hover:scale-110' : ''}
+          `}>
+            {isComplete ? (
+              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            ) : (
+              round.order
+            )}
+          </div>
         </div>
-        <div>
-          <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-gray-500">
+
+        <div className="flex-1">
+          <span className={`
+            text-[10px] font-bold uppercase tracking-[0.28em]
+            ${isCurrent ? 'text-blue-600' : isComplete ? 'text-green-600' : 'text-gray-500'}
+          `}>
             Round {String(round.order).padStart(2, '0')}
           </span>
-          <h3 className="mt-1 text-base font-semibold text-gray-900">{round.title}</h3>
+          <h3 className={`
+            mt-0.5 text-base font-semibold leading-tight
+            ${isCurrent ? 'text-gray-900' : 'text-gray-800'}
+            ${!isLocked && CardWrapper === Link ? 'group-hover:text-blue-600' : ''}
+          `}>
+            {round.title}
+          </h3>
         </div>
       </header>
 
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-gray-700">{round.persona}</p>
-        <p className="text-sm leading-relaxed text-gray-600">{round.focus}</p>
+      <div className="space-y-2.5 relative z-[1]">
+        <div className="flex items-center gap-2">
+          <div className={`
+            h-1.5 w-1.5 rounded-full
+            ${isCurrent ? 'bg-blue-500' : isComplete ? 'bg-green-500' : 'bg-gray-400'}
+          `} />
+          <p className={`
+            text-sm font-semibold
+            ${isCurrent ? 'text-blue-900' : 'text-gray-700'}
+          `}>
+            {round.persona}
+          </p>
+        </div>
+        <p className="text-sm leading-relaxed text-gray-600 pl-3.5">
+          {round.focus}
+        </p>
       </div>
 
-      <footer className="mt-auto space-y-3">
-        <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] ${statusTone[round.status]}`}>
-          {statusLabel[round.status]}
-        </span>
+      <footer className="mt-auto space-y-3 relative z-[1]">
+        <div className="flex items-center justify-between">
+          <span className={`
+            inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.28em]
+            transition-all duration-200
+            ${statusTone[round.status]}
+            ${isCurrent ? 'shadow-sm' : ''}
+          `}>
+            {isCurrent && (
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+              </span>
+            )}
+            {statusLabel[round.status]}
+          </span>
+        </div>
 
-        {!isLocked && round.curriculumId && round.roundNumber && (
-          <Link
-            href={`/interview/voice?curriculumId=${round.curriculumId}&roundNumber=${round.roundNumber}`}
-            className="inline-flex items-center gap-2 w-full px-3 py-2 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-center justify-center"
-          >
-            <Mic className="h-3 w-3" />
-            Practice voice
-          </Link>
+        {!isLocked && round.curriculumId && round.roundNumber && CardWrapper === Link && (
+          <div className={`
+            flex items-center justify-center gap-2 w-full px-3 py-2.5 text-xs font-semibold rounded-lg
+            transition-all duration-200
+            ${isCurrent
+              ? 'bg-blue-600 text-white shadow-md shadow-blue-200 group-hover:bg-blue-700 group-hover:shadow-lg group-hover:shadow-blue-300'
+              : 'bg-gray-600 text-white group-hover:bg-gray-700'
+            }
+          `}>
+            <Mic className="h-3.5 w-3.5" />
+            <span>Practice voice</span>
+            <svg
+              className="w-3 h-3 ml-auto transition-transform duration-200 group-hover:translate-x-1"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+            >
+              <path d="M5 12h14M12 5l7 7-7 7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         )}
       </footer>
-    </article>
+    </CardWrapper>
   );
 }

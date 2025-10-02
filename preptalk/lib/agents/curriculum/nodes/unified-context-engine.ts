@@ -44,6 +44,15 @@ export async function unifiedContextEngine(
   config: { llmProvider: LLMProviderService }
 ): Promise<Partial<CurriculumState>> {
 
+  // ⚡ CV DEMO MODE: Skip heavy synthesis, return null (downstream nodes handle it)
+  if (state.mode === 'cv_round_only') {
+    console.log('⚡ [CV DEMO] Skipping unified context synthesis for fast demo generation');
+    return {
+      unifiedContext: undefined,
+      currentStep: 'unified_context_skipped_demo'
+    };
+  }
+
   console.log('🔧 Unified Context Engine: Synthesizing job + user + CV data...');
 
   try {

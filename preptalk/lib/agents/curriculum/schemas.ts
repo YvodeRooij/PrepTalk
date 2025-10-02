@@ -61,7 +61,13 @@ export const CandidatePrepSchema = z.object({
   recognition_training: z.object({
     what_great_answers_sound_like: z.array(z.string()).max(5).describe('Indicators of great answers'),
     how_to_demonstrate_company_knowledge: z.array(z.string()).max(5).describe('Ways to show company knowledge')
-  }).describe('Recognition training guidance')
+  }).describe('Recognition training guidance'),
+  standard_questions_prep: z.array(z.object({
+    question: z.string().describe('Standard interview question'),
+    why_asked: z.string().describe('Why interviewers ask this question'),
+    approach: z.string().describe('How to approach answering'),
+    key_points: z.array(z.string()).max(4).describe('Key points to cover')
+  })).max(5).describe('Standard questions preparation guide')
 });
 
 // Enhanced role analysis schema (for research node)
@@ -195,8 +201,8 @@ export const RoundContentResponseSchema = z.object({
 export const QualityEvaluationSchema = z.object({
   overall_score: z.number().int().min(0).max(100).describe('Overall quality score 0-100'),
   weak_areas: z.array(z.string()).describe('Areas needing improvement'),
-  strengths: z.array(z.string()).optional().describe('Strong areas'),
-  recommendations: z.array(z.string()).optional().describe('Improvement recommendations')
+  strengths: z.array(z.string()).default([]).describe('Strong areas'),
+  recommendations: z.array(z.string()).default([]).describe('Improvement recommendations')
 });
 
 // Collection schemas for multiple items
@@ -232,7 +238,79 @@ export type QualityEvaluation = z.infer<typeof QualityEvaluationSchema>;
 export type Topic = z.infer<typeof TopicSchema>;
 export type EvaluationCriteria = z.infer<typeof EvaluationCriteriaSchema>;
 
+// Discovery Topic Schemas (Phase 1)
+// Used with LangChain's withStructuredOutput() for 100% parsing accuracy
+
+/**
+ * Schema for competitor company information
+ * Used to capture competitive intelligence during discovery
+ * Note: Using string() instead of url() for OpenAI compatibility
+ */
+export const CompetitorSchema = z.object({
+  name: z.string().min(1).describe('Competitor company name'),
+  url: z.string().min(1).describe('Competitor website or careers page URL (must start with https://)'),
+  industry: z.string().min(1).describe('Industry sector or vertical'),
+  size: z.string().nullable().optional().describe('Company size (e.g., "Enterprise (10,000+ employees)", "Startup (50-200 employees)")'),
+  differentiators: z.array(z.string()).nullable().optional().describe('Key competitive advantages or differentiators')
+});
+
+/**
+ * Schema for individual interview round details
+ * Nested within InterviewExperienceSchema
+ */
+export const InterviewRoundDetailSchema = z.object({
+  round_name: z.string().min(1).describe('Name or type of interview round (e.g., "Technical Screen", "Behavioral")'),
+  duration_minutes: z.number().int().min(0).nullable().optional().describe('Duration of the round in minutes'),
+  format: z.string().nullable().optional().describe('Interview format (e.g., "Phone", "Video", "Onsite", "Take-home")'),
+  focus_areas: z.array(z.string()).nullable().optional().describe('Topics or areas of focus for this round')
+});
+
+/**
+ * Schema for interview experience data from platforms like Glassdoor, Blind, etc.
+ * Captures real candidate experiences to inform preparation
+ * Note: Using string() instead of url() for OpenAI compatibility
+ */
+export const InterviewExperienceSchema = z.object({
+  source_url: z.string().min(1).describe('Source URL from Glassdoor, Blind, LeetCode, or other platforms (must start with https://)'),
+  date_posted: z.string().nullable().optional().describe('Date when the experience was posted'),
+  role: z.string().nullable().optional().describe('Job role or title for the interview'),
+  outcome: z.string().nullable().optional().describe('Interview outcome (e.g., "Offer received", "Rejected", "No response")'),
+  overall_difficulty: z.string().nullable().optional().describe('Overall difficulty rating (e.g., "Easy", "Medium", "Hard")'),
+  rounds: z.array(InterviewRoundDetailSchema).nullable().optional().describe('Details of individual interview rounds'),
+  preparation_tips: z.array(z.string()).nullable().optional().describe('Preparation tips from the candidate'),
+  key_insights: z.array(z.string()).nullable().optional().describe('Key insights or observations from the experience')
+});
+
+/**
+ * Schema for company news articles
+ * Used to track recent developments, funding, product launches, etc.
+ * Note: Using string() instead of url() for OpenAI compatibility
+ */
+export const CompanyNewsSchema = z.object({
+  title: z.string().min(1).describe('News article headline or title'),
+  url: z.string().min(1).describe('URL to the full news article (must start with https://)'),
+  summary: z.string().nullable().optional().describe('Brief summary of the news content'),
+  date_published: z.string().nullable().optional().describe('Publication date of the article'),
+  relevance_score: z.number().min(0).max(1).nullable().optional().describe('Relevance score from 0-1 indicating importance to role/company'),
+  sentiment: z.enum(['positive', 'neutral', 'negative']).nullable().optional().describe('Sentiment of the news (positive, neutral, or negative)'),
+  source: z.string().nullable().optional().describe('News source or publisher (e.g., "TechCrunch", "Bloomberg")')
+});
+
+// Collection schemas with appropriate min/max constraints
+export const CompetitorCollectionSchema = z.array(CompetitorSchema).min(1).max(5);
+export const InterviewExperienceCollectionSchema = z.array(InterviewExperienceSchema).min(1).max(10);
+export const CompanyNewsCollectionSchema = z.array(CompanyNewsSchema).min(1).max(6);
+
 // Collection types
 export type PersonaCollection = z.infer<typeof PersonaCollectionSchema>;
 export type QuestionSets = z.infer<typeof QuestionSetsSchema>;
 export type PrepGuides = z.infer<typeof PrepGuidesSchema>;
+
+// Discovery topic types
+export type Competitor = z.infer<typeof CompetitorSchema>;
+export type InterviewRoundDetail = z.infer<typeof InterviewRoundDetailSchema>;
+export type InterviewExperience = z.infer<typeof InterviewExperienceSchema>;
+export type CompanyNews = z.infer<typeof CompanyNewsSchema>;
+export type CompetitorCollection = z.infer<typeof CompetitorCollectionSchema>;
+export type InterviewExperienceCollection = z.infer<typeof InterviewExperienceCollectionSchema>;
+export type CompanyNewsCollection = z.infer<typeof CompanyNewsCollectionSchema>;

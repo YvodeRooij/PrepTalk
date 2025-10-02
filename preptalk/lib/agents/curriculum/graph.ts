@@ -163,7 +163,7 @@ export class CurriculumAgent {
 
       // Add fallback node for when validation fails
       .addNode("fallback_research", this.fallbackResearch.bind(this))
-      .addEdge("fallback_research", "parse_job");
+      .addEdge("fallback_research", "generate_rounds"); // Skip everything and go straight to generation since fallback provides all required data
 
     return workflow.compile();
   }
@@ -227,11 +227,28 @@ export class CurriculumAgent {
         ciIntegrationStrategy: 'Weave company research naturally into responses about motivation and fit',
         personalizedApproach: 'Supportive coaching approach focusing on transferable skills and growth mindset'
       },
+      // Add minimal structure so generation can proceed
+      structure: {
+        totalRounds: 5,
+        technicalRounds: 3,
+        behavioralRounds: 2,
+        difficulty: 'medium' as const,
+        focusAreas: ['Technical skills', 'Communication', 'Problem solving'],
+        timeline: '4-6 weeks',
+        rounds: [
+          { round_number: 1, type: 'behavioral', title: 'Initial Screen', focus_areas: ['General fit', 'Motivation', 'Communication'], duration_minutes: 30 },
+          { round_number: 2, type: 'technical', title: 'Technical Assessment', focus_areas: ['Core technical skills', 'Problem solving'], duration_minutes: 60 },
+          { round_number: 3, type: 'technical', title: 'System Design', focus_areas: ['System design', 'Architecture', 'Scalability'], duration_minutes: 60 },
+          { round_number: 4, type: 'behavioral', title: 'Behavioral Deep Dive', focus_areas: ['Leadership', 'Collaboration', 'Conflict resolution'], duration_minutes: 45 },
+          { round_number: 5, type: 'technical', title: 'Advanced Technical', focus_areas: ['Advanced algorithms', 'Optimization', 'Best practices'], duration_minutes: 60 }
+        ]
+      },
       warnings: [...(state.warnings || []), 'Using fallback research with limited data'],
     };
   }
 
   // Main execution method
+  // 🆕 MODIFIED: Accepts mode and options for CV-first flow
   async generate(
     userInput: string,
     userProfile?: {
@@ -252,7 +269,14 @@ export class CurriculumAgent {
       matchScore?: number;
       uploadedAt?: string;
       processingModel?: string;
-    } | null
+      cv_analysis_id?: string;
+    } | null,
+    options?: {
+      mode?: 'cv_round_only' | 'full';
+      existingCurriculumId?: string;
+      maxRounds?: number;
+      userId?: string;
+    }
   ): Promise<string> {
     // Ensure initialization is complete before running
     if (this.initializationPromise) {
@@ -260,10 +284,24 @@ export class CurriculumAgent {
       this.initializationPromise = null; // Clear after first run
     }
 
+    // 🆕 Extract options with defaults
+    const mode = options?.mode || 'full';
+    const maxRounds = options?.maxRounds ?? (mode === 'cv_round_only' ? 1 : undefined);
+
+    console.log(`🚀 Starting curriculum generation: mode=${mode}, maxRounds=${maxRounds || 'all'}`);
+
     const initialState: Partial<CurriculumState> = {
       userInput,
       userProfile: userProfile || null,
       cvData: cvData || null,
+
+      // 🆕 NEW: Mode control
+      mode,
+      existingCurriculumId: options?.existingCurriculumId || null,
+      maxRounds,
+      userId: options?.userId || null, // ✅ Pass userId for RLS
+
+      // Existing fields
       startTime: Date.now(),
       discoveredSources: [],
       errors: [],
@@ -271,7 +309,11 @@ export class CurriculumAgent {
       refinementAttempts: 0,
     };
 
+    const graphStartTime = Date.now();
     const finalState = await this.graph.invoke(initialState);
+    const graphDuration = ((Date.now() - graphStartTime) / 1000).toFixed(1);
+
+    console.log(`⏱️  [GRAPH] Total graph execution: ${graphDuration}s`);
 
     if (!finalState.curriculumId) {
       const errorMessage = finalState.errors?.join(', ') || 'Unknown error';

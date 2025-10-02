@@ -33,6 +33,16 @@ export type DashboardUser = {
   provider?: string | null;
 };
 
+export type CurriculumListItem = {
+  id: string;
+  title: string;
+  company_name: string | null;
+  job_title: string | null;
+  total_rounds: number;
+  updated_at: string;
+  created_at: string;
+};
+
 export type DashboardData = {
   user: DashboardUser;
   journey: JourneyRound[];
@@ -43,6 +53,8 @@ export type DashboardData = {
     loadedAt: string;
     missing: string[];
   };
+  allCurricula: CurriculumListItem[];
+  selectedCurriculumId: string | null;
 };
 
 const fallbackUser: DashboardUser = {
@@ -188,6 +200,8 @@ const curriculumSchema = z.object({
   id: z.string(),
   job_id: z.string().nullish(),
   title: z.string().nullish(),
+  company_name: z.string().nullish(),
+  job_title: z.string().nullish(),
   total_rounds: z.number().int().positive().nullish(),
   estimated_total_minutes: z.number().int().positive().nullish(),
 });
@@ -298,7 +312,7 @@ function buildQuestionGuides(
   return guides.length > 0 ? guides : fallback;
 }
 
-export async function getDashboardData(): Promise<DashboardData> {
+export async function getDashboardData(selectedCurriculumId?: string | null): Promise<DashboardData> {
   const missing: string[] = [];
   const supabase = await createClient();
 
@@ -310,6 +324,8 @@ export async function getDashboardData(): Promise<DashboardData> {
     journey: [...fallbackJourney],
     questionGuides: [...fallbackQuestionGuides],
     hasOwnCurriculum: false,
+    allCurricula: [],
+    selectedCurriculumId: null,
     metadata: {
       source,
       loadedAt: new Date().toISOString(),
@@ -334,21 +350,59 @@ export async function getDashboardData(): Promise<DashboardData> {
       console.log('✅ Authenticated user for dashboard:', supabaseUser.id);
     }
 
-    // Get most recent curriculum for this user (via cv_analyses.user_id)
+    // STEP 1: Get ALL curricula for the dropdown
+    const { data: allCurriculaData, error: allCurriculaError } = await supabase
+      .from('curricula')
+      .select(`
+        id,
+        title,
+        company_name,
+        job_title,
+        total_rounds,
+        updated_at,
+        created_at,
+        cv_analyses!inner(user_id)
+      `)
+      .eq('is_active', true)
+      .eq('cv_analyses.user_id', supabaseUser?.id)
+      .eq('generation_status', 'complete')
+      .not('company_name', 'is', null)
+      .order('updated_at', { ascending: false });
+
+    const allCurricula: CurriculumListItem[] = allCurriculaData?.map(c => ({
+      id: c.id,
+      title: c.title,
+      company_name: c.company_name,
+      job_title: c.job_title,
+      total_rounds: c.total_rounds,
+      updated_at: c.updated_at,
+      created_at: c.created_at,
+    })) || [];
+
+    data.allCurricula = allCurricula;
+
+    // STEP 2: Determine which curriculum to show
+    let curriculumIdToFetch = selectedCurriculumId;
+    if (!curriculumIdToFetch && allCurricula.length > 0) {
+      curriculumIdToFetch = allCurricula[0].id; // Default to most recent
+    }
+
+    data.selectedCurriculumId = curriculumIdToFetch;
+
+    // STEP 3: Get specific curriculum details
     const { data: curriculumData, error: curriculumError } = await supabase
       .from('curricula')
       .select(`
         id,
         job_id,
         title,
+        company_name,
+        job_title,
         total_rounds,
         estimated_total_minutes,
         cv_analyses!inner(user_id)
       `)
-      .eq('is_active', true)
-      .eq('cv_analyses.user_id', supabaseUser?.id)
-      .order('created_at', { ascending: false })
-      .limit(1)
+      .eq('id', curriculumIdToFetch)
       .maybeSingle();
 
     if (curriculumError) {
@@ -390,7 +444,17 @@ export async function getDashboardData(): Promise<DashboardData> {
       }
 
 
-      if (curriculum.job_id) {
+      // Priority 1: Use company_name and job_title directly from curriculum (new CV-first flow)
+      if (curriculum.company_name || curriculum.job_title) {
+        if (curriculum.company_name) {
+          data.user.companyName = curriculum.company_name;
+        }
+        if (curriculum.job_title) {
+          data.user.jobTitle = curriculum.job_title;
+        }
+      }
+      // Priority 2: Legacy flow - lookup via job_id
+      else if (curriculum.job_id) {
         const { data: jobData, error: jobError } = await supabase
           .from('jobs')
           .select('id, title, company_id')
@@ -426,7 +490,9 @@ export async function getDashboardData(): Promise<DashboardData> {
             }
           }
         }
-      } else {
+      }
+      // Priority 3: Last resort fallback
+      else {
         // Fallback: Extract company name from curriculum title
         if (curriculum.title) {
           const titleLower = curriculum.title.toLowerCase();

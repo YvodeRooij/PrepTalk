@@ -132,7 +132,7 @@ export async function POST(request: NextRequest) {
         current_job_role: validatedAnalysis.summary.currentRole,
         target_role: validatedAnalysis.summary.targetRole || targetRole,
         experience_level: determineExperienceLevel(validatedAnalysis),
-        years_of_experience: validatedAnalysis.summary.yearsOfExperience,
+        years_of_experience: Math.round(validatedAnalysis.summary.yearsOfExperience || 0),
         headline: validatedAnalysis.summary.headline,
         bio: validatedAnalysis.summary.summary,
         location: validatedAnalysis.personalInfo.location,

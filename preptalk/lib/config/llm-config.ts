@@ -2,7 +2,7 @@
 // Supports Gemini, OpenAI, Anthropic, Grok with flexible task-specific model selection
 
 export interface ModelConfig {
-  provider: 'gemini' | 'openai' | 'anthropic' | 'grok' | 'mistral';
+  provider: 'gemini' | 'gemini-pro' | 'openai' | 'anthropic' | 'grok' | 'mistral';
   model: string;
   temperature: number;
   maxTokens: number;
@@ -13,8 +13,8 @@ export interface ModelConfig {
 
 export interface LLMConfig {
   // Provider Selection
-  primaryProvider: 'gemini' | 'openai' | 'anthropic' | 'grok' | 'mistral';
-  fallbackProviders: Array<'gemini' | 'openai' | 'anthropic' | 'grok' | 'mistral'>;
+  primaryProvider: 'gemini' | 'gemini-pro' | 'openai' | 'anthropic' | 'grok' | 'mistral';
+  fallbackProviders: Array<'gemini' | 'gemini-pro' | 'openai' | 'anthropic' | 'grok' | 'mistral'>;
 
   // Task-Specific Models for curriculum generation
   models: {
@@ -24,6 +24,7 @@ export interface LLMConfig {
     question_generation: ModelConfig;
     candidate_prep: ModelConfig;
     quality_evaluation: ModelConfig;
+    unified_context_engine: ModelConfig;
   };
 
   // Mistral OCR specific configuration
@@ -73,22 +74,22 @@ export interface LLMConfig {
 
 // Default configuration optimized for curriculum generation
 export const DEFAULT_LLM_CONFIG: LLMConfig = {
-  primaryProvider: 'openai',
-  fallbackProviders: ['gemini'], // Only use working providers
+  primaryProvider: 'gemini',
+  fallbackProviders: ['gemini-pro', 'openai'], // Flash → Pro → OpenAI (cost-optimized with stability)
 
   models: {
-    // Job parsing: Use Gemini for URL context support
+    // Job parsing: Use OpenAI for reliability
     job_parsing: {
-      provider: 'gemini',
-      model: 'gemini-2.5-flash',
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
       temperature: 0.1,
       maxTokens: 2000
     },
 
-    // Company research: Use Gemini for URL context and search
+    // Company research: Use OpenAI for reliability
     company_research: {
-      provider: 'gemini',
-      model: 'gemini-2.5-pro',
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
       temperature: 0.3,
       maxTokens: 4000
     },
@@ -127,8 +128,8 @@ export const DEFAULT_LLM_CONFIG: LLMConfig = {
 
     // Unified context engine: Critical synthesis of all inputs - needs best model
     unified_context_engine: {
-      provider: 'gemini',
-      model: 'gemini-2.5-pro', // NON-NEGOTIABLE: Using Gemini-2.5-Pro for critical context synthesis
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5-20250929', // Claude Sonnet 4.5 for superior reasoning and complex agent workflows
       temperature: 0.4,
       maxTokens: 8192, // Large context for synthesizing job + user + CV data
       timeout: 60000 // Quality > Speed - 60 second timeout
@@ -250,36 +251,79 @@ export const PROVIDER_CAPABILITIES = {
   }
 } as const;
 
-// Task-specific provider recommendations - Only using working providers
+// Task-specific provider recommendations - Gemini Flash → Pro → OpenAI (cost + stability)
 export const TASK_PROVIDER_RECOMMENDATIONS = {
-  job_parsing: ['gemini', 'openai'], // Fast, accurate structured parsing
-  company_research: ['gemini', 'openai'], // Good at understanding context
-  persona_generation: ['openai', 'gemini'], // Creative character creation
-  question_generation: ['openai', 'gemini'], // Balanced creativity and structure
-  candidate_prep: ['openai', 'gemini'], // Creative example generation - Use working providers
-  quality_evaluation: ['openai', 'gemini'], // Complex schema evaluation - OpenAI first (research-backed)
-  unified_context_engine: ['gemini', 'openai'] // Critical synthesis - Use working providers
+  job_parsing: ['gemini', 'gemini-pro', 'openai'], // Flash → Pro → OpenAI
+  company_research: ['gemini', 'gemini-pro', 'openai'], // Flash → Pro → OpenAI (web scraping)
+  persona_generation: ['gemini', 'gemini-pro', 'openai'], // Creative character creation
+  question_generation: ['gemini', 'gemini-pro', 'openai'], // Balanced creativity and structure
+  candidate_prep: ['gemini', 'gemini-pro', 'openai'], // Creative example generation
+  quality_evaluation: ['gemini', 'gemini-pro', 'openai'], // Complex schema evaluation
+  unified_context_engine: ['anthropic', 'gemini', 'gemini-pro', 'openai'] // Claude first, then Gemini Flash → Pro → OpenAI
 } as const;
+
+// Helper function to check if a provider has API key configured
+function checkProviderAvailability(provider: LLMConfig['primaryProvider']): boolean {
+  const envKeyMap: Record<LLMConfig['primaryProvider'], string> = {
+    'gemini': 'GOOGLE_API_KEY',
+    'gemini-pro': 'GOOGLE_API_KEY',
+    'openai': 'OPENAI_API_KEY',
+    'anthropic': 'ANTHROPIC_API_KEY',
+    'grok': 'GROK_API_KEY',
+    'mistral': 'MISTRAL_API_KEY'
+  };
+
+  const envKey = envKeyMap[provider];
+  return envKey ? !!process.env[envKey] : false;
+}
 
 // Utility functions for config management
 export function getOptimalProvider(
   task: keyof LLMConfig['models'],
   config: LLMConfig
 ): string {
-  const recommendations = TASK_PROVIDER_RECOMMENDATIONS[task];
+  // STEP 1: Respect configured provider (OOTB principle)
+  const taskModelConfig = config.models[task];
+  const configuredProvider = taskModelConfig?.provider;
+
+  // Build available providers list
   const availableProviders = [config.primaryProvider, ...config.fallbackProviders];
+
+  // If task has a configured provider, check if it's available
+  if (configuredProvider) {
+    // Check if provider is in the standard availability list
+    if (availableProviders.includes(configuredProvider)) {
+      console.log(`✅ Using configured provider '${configuredProvider}' for task '${task}'`);
+      return configuredProvider;
+    }
+
+    // OR check if provider has API key configured (even if not in fallback list)
+    // This allows task-specific providers like Anthropic that aren't in primary/fallback
+    const hasApiKey = checkProviderAvailability(configuredProvider);
+    if (hasApiKey) {
+      console.log(`✅ Using task-specific provider '${configuredProvider}' for task '${task}'`);
+      return configuredProvider;
+    }
+
+    console.warn(`⚠️ Configured provider '${configuredProvider}' for task '${task}' is not available, falling back to recommendations`);
+  }
+
+  // STEP 2: Fallback to recommendations (existing logic)
+  const recommendations = TASK_PROVIDER_RECOMMENDATIONS[task];
 
   // If we have recommendations for this task, use them
   if (recommendations) {
     // Find first recommended provider that's available
     for (const recommended of recommendations) {
       if (availableProviders.includes(recommended)) {
+        console.log(`📋 Using recommended provider '${recommended}' for task '${task}'`);
         return recommended;
       }
     }
   }
 
-  // Fallback to primary provider if no recommendations or none available
+  // STEP 3: Ultimate fallback
+  console.warn(`⚠️ No recommended provider found for task '${task}', using primary: ${config.primaryProvider}`);
   return config.primaryProvider;
 }
 

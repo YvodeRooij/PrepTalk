@@ -5,8 +5,239 @@ import { createClient } from '@supabase/supabase-js';
 import { CurriculumState } from '../state';
 
 /**
+ * ⚡ CV DEMO MODE: Lightweight save without job/company creation
+ * Saves only curriculum + round data for fast demo experience
+ */
+async function saveCvDemoMode(
+  state: CurriculumState,
+  supabase: ReturnType<typeof createClient>
+): Promise<Partial<CurriculumState>> {
+  console.log('⚡ [CV DEMO] Saving demo curriculum with minimal job record');
+  const timestamp = new Date().toISOString();
+
+  try {
+    if (!state.rounds || !state.structure) {
+      return {
+        errors: ['Missing required data for CV demo save'],
+      };
+    }
+
+    // STEP 1: Create minimal job record (required for curricula.job_id constraint)
+    console.log('⚡ [CV DEMO] Creating minimal job record');
+    const { data: jobRecord, error: jobError } = await supabase
+      .from('jobs')
+      .insert({
+        company_id: null,  // Allow null for demo
+        title: 'Demo Interview Practice',
+        level: 'mid',
+        source_url: state.userInput || null,
+        created_at: timestamp,
+      })
+      .select('id')
+      .single();
+
+    if (jobError || !jobRecord) {
+      console.error(`❌ [CV DEMO] Job creation failed: ${jobError?.message}`);
+      return {
+        errors: [`Failed to create demo job: ${jobError?.message}`],
+      };
+    }
+
+    console.log(`✅ [CV DEMO] Demo job created: ${jobRecord.id}`);
+
+    // STEP 2: Create curriculum record with job_id
+    const { data: curriculumRecord, error: curriculumError} = await supabase
+      .from('curricula')
+      .insert({
+        job_id: jobRecord.id,  // ✅ Required by NOT NULL constraint
+        title: 'CV Demo Round',
+        overview: 'Quick CV walkthrough demo',
+        total_rounds: 1,
+        difficulty_level: 'intermediate',
+        generation_status: 'cv_round_only',  // Mark as demo
+        completeness_score: 85,
+        cv_analysis_id: state.cvData?.cv_analysis_id || null,
+        created_at: timestamp,
+        updated_at: timestamp,
+      })
+      .select('id')
+      .single();
+
+    if (curriculumError || !curriculumRecord) {
+      console.error(`❌ [CV DEMO] Curriculum creation failed: ${curriculumError?.message}`);
+      return {
+        errors: [`Failed to create demo curriculum: ${curriculumError?.message}`],
+      };
+    }
+
+    const curriculumId = curriculumRecord.id;
+    console.log(`✅ [CV DEMO] Curriculum created: ${curriculumId}`);
+
+    // STEP 3: Save the CV round
+    const round = state.rounds[0];
+    const { error: roundError } = await supabase
+      .from('curriculum_rounds')
+      .insert({
+        curriculum_id: curriculumId,
+        round_number: 1,
+        round_type: round.round_type,
+        title: round.title,
+        description: round.description || 'CV walkthrough demo round',
+        duration_minutes: round.duration_minutes,
+        interviewer_persona: round.interviewer_persona || {},
+        topics_to_cover: round.topics_to_cover || [],
+        evaluation_criteria: round.evaluation_criteria || [],
+        opening_script: round.opening_script || '',
+        closing_script: round.closing_script || '',
+        passing_score: 70,
+        candidate_prep_guide: {
+          ci_talking_points: [],
+          recognition_training: [],
+          standard_questions_prep: []
+        },
+        created_at: timestamp,
+        updated_at: timestamp,
+      });
+
+    if (roundError) {
+      console.error(`❌ [CV DEMO] Round creation failed: ${roundError.message}`);
+      return {
+        errors: [`Failed to save demo round: ${roundError.message}`],
+      };
+    }
+
+    console.log(`✅ [CV DEMO] Demo round saved successfully`);
+
+    return {
+      curriculumId,
+      currentStep: 'saved_demo',
+    };
+
+  } catch (error) {
+    console.error('❌ [CV DEMO] Save error:', error);
+    return {
+      errors: [`Demo save error: ${error instanceof Error ? error.message : 'Unknown'}`],
+    };
+  }
+}
+
+/**
+ * 🆕 HELPER: Update existing curriculum (CV-first flow)
+ * Updates curriculum from cv_round_only → complete with all 5 rounds
+ */
+async function updateExistingCurriculum(
+  state: CurriculumState,
+  supabase: ReturnType<typeof createClient>
+): Promise<Partial<CurriculumState>> {
+  console.log(`🔄 [UPDATE] Updating existing curriculum: ${state.existingCurriculumId}`);
+  const timestamp = new Date().toISOString();
+  const updateStartTime = Date.now();
+
+  try {
+    // STEP 1: Update curriculum record
+    const { error: updateError } = await supabase
+      .from('curricula')
+      .update({
+        title: state.jobData?.title && state.companyContext?.name
+          ? `${state.jobData.title} at ${state.companyContext.name}`
+          : state.jobData?.title || 'Interview Preparation',
+        total_rounds: state.rounds.length,
+        generation_status: 'complete',  // Update status
+        completeness_score: state.quality || 0,
+        company_name: state.jobData?.company_name || state.companyContext?.name || null,
+        job_title: state.jobData?.title || null,
+        updated_at: timestamp,
+      })
+      .eq('id', state.existingCurriculumId);
+
+    if (updateError) {
+      console.error(`❌ [UPDATE] Failed to update curriculum: ${updateError.message}`);
+      return {
+        errors: [`Failed to update curriculum: ${updateError.message}`],
+      };
+    }
+
+    // STEP 2: Delete old rounds (CV Round only)
+    const { error: deleteError } = await supabase
+      .from('curriculum_rounds')
+      .delete()
+      .eq('curriculum_id', state.existingCurriculumId);
+
+    if (deleteError) {
+      console.error(`⚠️ [UPDATE] Failed to delete old rounds: ${deleteError.message}`);
+      // Continue anyway - will insert new rounds
+    }
+
+    // STEP 3: Insert all new rounds (all 5)
+    // Map round types to valid database values
+    const mapRoundType = (type: string): string => {
+      const validTypes = ['recruiter_screen', 'behavioral_deep_dive', 'culture_values_alignment', 'strategic_role_discussion', 'executive_final'];
+      if (validTypes.includes(type)) return type;
+
+      const lower = type.toLowerCase().trim();
+      if (lower.includes('recruiter') || lower.includes('phone') || lower.includes('screening') || lower.includes('initial')) return 'recruiter_screen';
+      if (lower.includes('behavioral') || lower.includes('competency')) return 'behavioral_deep_dive';
+      if (lower.includes('culture') || lower.includes('values') || lower.includes('fit')) return 'culture_values_alignment';
+      if (lower.includes('strategic') || lower.includes('role') || lower.includes('case')) return 'strategic_role_discussion';
+      if (lower.includes('executive') || lower.includes('final') || lower.includes('senior')) return 'executive_final';
+
+      console.warn(`⚠️ [UPDATE] Unknown round type "${type}", defaulting to behavioral_deep_dive`);
+      return 'behavioral_deep_dive';
+    };
+
+    const roundsToSave = state.rounds.map(round => ({
+      curriculum_id: state.existingCurriculumId,
+      round_number: round.round_number,
+      round_type: mapRoundType(round.round_type),
+      title: round.title,
+      description: round.description,
+      duration_minutes: round.duration_minutes,
+      interviewer_persona: round.interviewer_persona,
+      topics_to_cover: round.topics_to_cover || [],
+      evaluation_criteria: round.evaluation_criteria || [],
+      opening_script: round.opening_script || '',
+      closing_script: round.closing_script || '',
+      passing_score: round.passing_score || 70,
+      candidate_prep_guide: round.candidate_prep_guide || {
+        ci_talking_points: [],
+        recognition_training: [],
+        standard_questions_prep: []
+      },
+      created_at: timestamp,
+      updated_at: timestamp,
+    }));
+
+    const { error: roundsError } = await supabase
+      .from('curriculum_rounds')
+      .insert(roundsToSave);
+
+    if (roundsError) {
+      console.error(`❌ [UPDATE] Failed to insert new rounds: ${roundsError.message}`);
+      return {
+        errors: [`Failed to insert rounds: ${roundsError.message}`],
+      };
+    }
+
+    const updateDuration = Date.now() - updateStartTime;
+    console.log(`✅ [UPDATE] Complete in ${updateDuration}ms - Updated to ${state.rounds.length} rounds`);
+
+    return {
+      curriculumId: state.existingCurriculumId,
+      endTime: Date.now(),
+    };
+
+  } catch (error) {
+    console.error('❌ [UPDATE] Error:', error);
+    return {
+      errors: [`Update error: ${error instanceof Error ? error.message : 'Unknown'}`],
+    };
+  }
+}
+
+/**
  * Node: Save curriculum to database
  * This is the final node that persists everything
+ * 🆕 MODIFIED: Supports updating existing curriculum for CV-first flow
  */
 export async function saveCurriculum(
   state: CurriculumState,
@@ -25,11 +256,23 @@ export async function saveCurriculum(
     return createClient(url, key);
   })();
 
+  // ⚡ CV DEMO MODE: Lightweight save with minimal data
+  if (state.mode === 'cv_round_only') {
+    return await saveCvDemoMode(state, supabase);
+  }
+
   if (!state.jobData || !state.rounds || !state.structure) {
     return {
       errors: ['Missing required data to save curriculum'],
     };
   }
+
+  // 🆕 UPDATE PATH: If existingCurriculumId provided, update instead of create
+  if (state.existingCurriculumId) {
+    return await updateExistingCurriculum(state, supabase);
+  }
+
+  // 🔄 CREATE PATH: Normal flow continues below (unchanged)
 
   try {
     // 🚀 STRATEGIC LOG: Persistence Flow Start
@@ -148,19 +391,32 @@ export async function saveCurriculum(
       captured_at: timestamp
     } : null;
 
-    // COMPLETE discovery intelligence - full source analysis
-    const discoveryMetadata = state.discoveredSources?.length ? {
-      sources_evaluated: state.discoveredSources.length,
-      sources_useful: state.discoveredSources.filter(s => s.validation?.isUseful).length,
-      source_types: [...new Set(state.discoveredSources.map(s => s.sourceType))],
-      average_trust_score: state.discoveredSources.reduce((sum, s) => sum + s.trustScore, 0) / state.discoveredSources.length,
-      validation_summary: state.discoveredSources.map(s => ({
+    // COMPLETE discovery intelligence - full source analysis + competitors with URLs
+    const discoveryMetadata = state.discoveredSources?.length || state.discoveryMetadata ? {
+      // Legacy source-based discovery
+      sources_evaluated: state.discoveredSources?.length || 0,
+      sources_useful: state.discoveredSources?.filter(s => s.validation?.isUseful).length || 0,
+      source_types: state.discoveredSources ? [...new Set(state.discoveredSources.map(s => s.sourceType))] : [],
+      average_trust_score: state.discoveredSources?.length
+        ? state.discoveredSources.reduce((sum, s) => sum + s.trustScore, 0) / state.discoveredSources.length
+        : null,
+      validation_summary: state.discoveredSources?.map(s => ({
         url: s.url,
         type: s.sourceType,
         trust_score: s.trustScore,
         is_useful: s.validation?.isUseful || false,
         confidence: s.validation?.confidence || 0
-      })),
+      })) || [],
+
+      // 🆕 NEW: Intelligent discovery data with full competitor objects
+      competitors: state.discoveryMetadata?.competitors || [],
+      interview_experiences: state.interviewExperiences || [],
+      company_news: state.companyNews || [],
+      cache_hit: state.discoveryMetadata?.cacheHit,
+      latency_ms: state.discoveryMetadata?.latencyMs,
+      search_queries: state.discoveryMetadata?.searchQueries,
+      grounding_metadata: state.discoveryMetadata?.groundingMetadata,
+
       processed_at: timestamp
     } : null;
 
@@ -219,6 +475,8 @@ export async function saveCurriculum(
           refinement_iterations: state.structure?.refinement_iterations || 0
         },
         completeness_score: state.quality || 0,
+        // 🆕 NEW: Set generation status based on mode
+        generation_status: state.mode === 'cv_round_only' ? 'cv_round_only' : 'complete',
         // 🆕 ADD MISSING SCORING FIELDS FOR COMPLETE DATA
         relevance_score: Math.min(95, (state.quality || 85) + 5), // Slightly higher than completeness
         difficulty_score: state.structure?.difficulty_level === 'advanced' ? 85 :
@@ -361,6 +619,12 @@ export async function saveCurriculum(
 
           if (!hasData) {
             console.log(`   ❌ No candidatePrepGuides data for mapped type '${mappedRoundType}'. Original: '${originalRoundType}'. Available keys: [${Object.keys(state.candidatePrepGuides || {}).join(', ')}]`);
+            // Return minimal structure to satisfy constraint
+            return {
+              ci_talking_points: [],
+              recognition_training: [],
+              standard_questions_prep: []
+            };
           }
 
           return {

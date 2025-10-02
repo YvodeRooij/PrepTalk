@@ -1,6 +1,27 @@
 // Jest Setup for PrepTalk Tests
 
 import '@testing-library/jest-dom'
+import { TextEncoder, TextDecoder } from 'util'
+import { config } from 'dotenv'
+
+// Load environment variables from .env.local
+config({ path: '.env.local' })
+
+// Polyfill TextEncoder/TextDecoder for LangChain tests
+global.TextEncoder = TextEncoder
+global.TextDecoder = TextDecoder
+
+// Polyfill ReadableStream for LangChain tests
+if (typeof global.ReadableStream === 'undefined') {
+  const { ReadableStream } = require('stream/web')
+  global.ReadableStream = ReadableStream
+}
+
+// Polyfill fetch for Anthropic SDK (required for @langchain/anthropic v0.3.30+)
+if (typeof global.fetch === 'undefined') {
+  const fetch = require('node-fetch')
+  global.fetch = fetch
+}
 
 // Mock Next.js modules
 jest.mock('next/navigation', () => ({
@@ -43,11 +64,13 @@ jest.mock('@/lib/supabase/client', () => ({
   })
 }))
 
-// Mock environment variables
-process.env.MISTRAL_API_KEY = 'mock-mistral-key'
-process.env.GOOGLE_API_KEY = 'mock-google-key'
-process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://mock.supabase.co'
-process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'mock-anon-key'
+// Mock environment variables (only if not already set from .env.local)
+if (!process.env.MISTRAL_API_KEY) process.env.MISTRAL_API_KEY = 'mock-mistral-key'
+if (!process.env.GOOGLE_API_KEY) process.env.GOOGLE_API_KEY = 'mock-google-key'
+if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = 'mock-openai-key'
+if (!process.env.ANTHROPIC_API_KEY) process.env.ANTHROPIC_API_KEY = 'mock-anthropic-key'
+if (!process.env.NEXT_PUBLIC_SUPABASE_URL) process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://mock.supabase.co'
+if (!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'mock-anon-key'
 
 // Global test utilities
 global.mockFetch = (mockResponse) => {

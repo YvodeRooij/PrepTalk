@@ -1,6 +1,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { LogOut, Home, BookOpen, CreditCard, User, FileText } from 'lucide-react';
+import { Toaster } from 'sonner';
 
 export default function DashboardLayout({
   children,
@@ -9,6 +10,7 @@ export default function DashboardLayout({
 }) {
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
+      <Toaster position="top-right" richColors />
       <nav className="border-b border-gray-200 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
