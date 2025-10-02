@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Upload, ExternalLink, Loader2, ChevronLeft } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { SplitScreenView } from '@/components/curriculum/split-screen-view';
+import { toast } from 'sonner';
 
 type Step = 'job-url' | 'cv-upload' | 'profile' | 'generating' | 'complete';
 
@@ -24,6 +26,16 @@ export default function CurriculumCreatePage() {
   const [curriculumId, setCurriculumId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+
+  // 🆕 NEW: Two-stage generation state
+  const [showSplitScreen, setShowSplitScreen] = useState(false);
+  const [cvRoundReady, setCvRoundReady] = useState(false);
+  const [fullCurriculumReady, setFullCurriculumReady] = useState(false);
+  const [generationStartTime, setGenerationStartTime] = useState(0);
+  const [cvData, setCvData] = useState<any>(null);
+
+  // 🆕 Real progress tracking
+  const [progressStage, setProgressStage] = useState<'cv_analysis' | 'demo_generation' | 'complete'>('cv_analysis');
 
   // Get authenticated user on mount
   useEffect(() => {
@@ -82,18 +94,24 @@ export default function CurriculumCreatePage() {
     }
   };
 
+  // 🆕 MODIFIED: Two-stage curriculum generation
   const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setCurrentStep('generating');
-    setGenerating(true);
-    setError(null); // Clear any previous errors
+    setError(null);
 
     try {
       if (!userId) {
         throw new Error('User not authenticated');
       }
 
-      // Step 1: Upload and analyze CV
+      // 🎬 SHOW SPLIT SCREEN IMMEDIATELY (before any processing)
+      setShowSplitScreen(true);
+      setCurrentStep('generating');
+      setGenerating(true);
+      setGenerationStartTime(Date.now());
+
+      // STAGE 0: Upload and analyze CV (visible in progress)
+      console.log('📄 Stage 0: Analyzing CV...');
       const cvFormData = new FormData();
       cvFormData.append('file', formData.cvFile!);
       cvFormData.append('userId', userId);
@@ -109,24 +127,67 @@ export default function CurriculumCreatePage() {
 
       const cvAnalysisResult = await cvResponse.json();
 
-      // Transform CV data to match expected format for curriculum generation
-      const cvData = {
-        analysis: cvAnalysisResult, // Wrap the CV analysis in an 'analysis' property
+      // Transform CV data
+      const cvDataTransformed = {
+        analysis: cvAnalysisResult,
         cv_analysis_id: cvAnalysisResult.cv_analysis_id,
         insights: cvAnalysisResult.insights
       };
 
-      // Step 2: Generate curriculum (can take up to 10 minutes for complex jobs)
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 660000); // 11 minute timeout (longer than API route)
+      setCvData(cvDataTransformed);
+      console.log('✅ CV analysis complete');
+      setProgressStage('complete'); // ✅ CV analysis done
 
-      const curriculumResponse = await fetch('/api/curriculum/generate', {
+      // ═══════════════════════════════════════════════════════════
+      // STAGE 1: INSTANT DEMO CREATION (< 2 seconds!)
+      // ═══════════════════════════════════════════════════════════
+      console.log('⚡ Stage 1: Creating demo curriculum (instant)...');
+
+      const cvRoundResponse = await fetch('/api/curriculum/create-demo', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cvAnalysisId: cvAnalysisResult.cv_analysis_id,
+          jobUrl: formData.jobUrl,
+        }),
+      });
+
+      if (!cvRoundResponse.ok) {
+        const errorData = await cvRoundResponse.json().catch(() => ({}));
+        console.error('❌ CV demo creation failed:', errorData);
+        throw new Error(`CV demo curriculum creation failed: ${errorData.error || cvRoundResponse.statusText}`);
+      }
+
+      const cvRoundData = await cvRoundResponse.json();
+      console.log('🎯 CV Round Data:', cvRoundData);
+      const generatedCurriculumId = cvRoundData.curriculum_id;
+
+      if (!generatedCurriculumId) {
+        console.error('❌ No curriculum ID returned:', cvRoundData);
+        throw new Error('No curriculum ID returned from demo generation');
+      }
+
+      console.log('✅ Stage 1 complete in < 2s:', generatedCurriculumId);
+      setCurriculumId(generatedCurriculumId);
+      setCvRoundReady(true);
+      setGenerating(false);
+
+      toast.success('🎉 Interview ready! Start practicing.', {
+        duration: 3000,
+      });
+
+      // ═══════════════════════════════════════════════════════════
+      // STAGE 2: FULL CURRICULUM (2-3 minutes with batch parallelization, background non-blocking)
+      // ═══════════════════════════════════════════════════════════
+      console.log('🚀 Stage 2: Generating full curriculum in background with batch parallelization...');
+
+      // Fire-and-forget: let backend do its job, we'll poll the database for truth
+      fetch('/api/curriculum/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userInput: formData.jobUrl,
+          mode: 'full',  // 🎯 Full generation with batch parallelization
           userProfile: {
             excitement: formData.excitement,
             concerns: formData.concerns,
@@ -134,56 +195,69 @@ export default function CurriculumCreatePage() {
             backgroundContext: formData.backgroundContext,
             preparationGoals: formData.preparationGoals,
           },
-          cvData: cvData,
+          cvData: cvDataTransformed,
+          existingCurriculumId: generatedCurriculumId,  // ✅ Update the demo we just created
         }),
-        signal: controller.signal
+      }).catch(err => {
+        // Ignore fetch errors - we'll poll the database for truth
+        console.log('⏳ Backend request sent, polling database for status...');
       });
 
-      clearTimeout(timeoutId);
+      // Start polling database to check when it's actually complete
+      const pollInterval = setInterval(async () => {
+        const supabase = createClient();
+        const { data: curriculum } = await supabase
+          .from('curricula')
+          .select('generation_status, total_rounds')
+          .eq('id', generatedCurriculumId)
+          .single();
 
-      if (!curriculumResponse.ok) {
-        // 504 Gateway Timeout is expected for long-running curriculum generation
-        // The backend continues processing even after frontend timeout
-        if (curriculumResponse.status === 504) {
-          // Don't treat this as an error - redirect to dashboard to check results
-          console.log('✅ Curriculum generation continuing in background after gateway timeout');
-          setCurrentStep('complete');
+        console.log('📊 Polling status:', curriculum?.generation_status, curriculum?.total_rounds);
+
+        if (curriculum?.generation_status === 'complete') {
+          clearInterval(pollInterval);
+          setFullCurriculumReady(true);
+
+          toast.success('Curriculum ready! 🎉', { duration: 2000 });
+
+          // Auto-redirect to dashboard
           setTimeout(() => {
-            router.push('/dashboard');
-          }, 1000);
-          return;
+            router.push(`/dashboard?curriculumId=${generatedCurriculumId}`);
+          }, 1500);
         }
-        throw new Error(`Curriculum generation failed: ${curriculumResponse.status} ${curriculumResponse.statusText}`);
-      }
+      }, 5000); // Poll every 5 seconds
 
-      const result = await curriculumResponse.json();
-      setCurriculumId(result.curriculumId);
-      setCurrentStep('complete');
-
-      // Auto-redirect to dashboard after successful curriculum generation
-      setTimeout(() => {
-        router.push('/dashboard');
-      }, 2000); // 2 second delay to show success message
+      // Safety: stop polling after 5 minutes
+      setTimeout(() => clearInterval(pollInterval), 300000);
 
     } catch (error) {
-      console.error('Error generating curriculum:', error);
-
-      if (error.name === 'AbortError') {
-        // Frontend timeout reached - but backend may still be processing
-        console.log('✅ Frontend timeout reached, redirecting to dashboard to check results');
-        setCurrentStep('complete');
-        setTimeout(() => {
-          router.push('/dashboard');
-        }, 1000);
-        return;
-      } else {
-        setError(error.message || 'Failed to generate curriculum. Please try again.');
-      }
-      setCurrentStep('profile');
-    } finally {
+      console.error('❌ Generation failed:', error);
       setGenerating(false);
+      setShowSplitScreen(false);
+
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : 'Failed to generate curriculum'
+      );
+
+      setError(error instanceof Error ? error.message : 'Failed to generate curriculum. Please try again.');
+      setCurrentStep('profile');
     }
   };
+
+  // 🆕 NEW: Show split screen during two-stage generation
+  if (showSplitScreen) {
+    return (
+      <SplitScreenView
+        curriculumId={curriculumId || ''}
+        cvRoundReady={cvRoundReady}
+        fullCurriculumReady={fullCurriculumReady}
+        generationStartTime={generationStartTime}
+        progressStage={progressStage}
+      />
+    );
+  }
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-2xl">

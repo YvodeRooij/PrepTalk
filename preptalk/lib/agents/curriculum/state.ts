@@ -21,6 +21,12 @@ import type {
 // Import CV analysis types
 import type { CVAnalysis, CVInsights } from '../../schemas/cv-analysis';
 
+// Import discovery types
+import type {
+  InterviewExperience,
+  CompanyNews
+} from './schemas';
+
 // Define the state annotation for curriculum generation graph
 export const CurriculumStateAnnotation = Annotation.Root({
   // Input
@@ -51,7 +57,22 @@ export const CurriculumStateAnnotation = Annotation.Root({
     matchScore?: number;
     uploadedAt?: string;
     processingModel?: string;
+    cv_analysis_id?: string;  // Link to cv_analyses table
   } | null>({
+    default: () => null,
+  }),
+
+  // 🆕 NEW: Mode control for CV-first progressive experience
+  mode: Annotation<'cv_round_only' | 'full'>({
+    default: () => 'full',
+  }),
+  existingCurriculumId: Annotation<string | null>({
+    default: () => null,
+  }),
+  maxRounds: Annotation<number | undefined>({
+    default: () => undefined,
+  }),
+  userId: Annotation<string | null>({
     default: () => null,
   }),
 
@@ -78,7 +99,21 @@ export const CurriculumStateAnnotation = Annotation.Root({
       confidence: number;
     };
   }>>({
-    reducer: (old, new_) => [...old, ...new_],
+    // Merge sources by URL - replace existing sources when data is fetched
+    reducer: (old, new_) => {
+      const merged = [...old];
+      new_.forEach(newSource => {
+        const existingIndex = merged.findIndex(s => s.url === newSource.url);
+        if (existingIndex >= 0) {
+          // Replace existing source (e.g., when adding data from fetch)
+          merged[existingIndex] = { ...merged[existingIndex], ...newSource };
+        } else {
+          // Add new source (e.g., during discovery)
+          merged.push(newSource);
+        }
+      });
+      return merged;
+    },
     default: () => [],
   }),
 
@@ -103,7 +138,25 @@ export const CurriculumStateAnnotation = Annotation.Root({
     strategicAdvantages: string[];
     recentDevelopments: string[];
     competitivePositioning: string;
+    differentiators?: string[];
+    marketContext?: string;
   }>,
+
+  // NEW: Intelligent Discovery Data (from cache-aware discovery)
+  interviewExperiences: Annotation<InterviewExperience[]>({
+    default: () => [],
+  }),
+  companyNews: Annotation<CompanyNews[]>({
+    default: () => [],
+  }),
+  discoveryMetadata: Annotation<{
+    cacheHit?: boolean;
+    latencyMs?: number;
+    searchQueries?: Record<string, string>;
+    groundingMetadata?: any;
+  } | null>({
+    default: () => null,
+  }),
 
   // NEW: Non-Technical Persona Generation Phase Outputs
   generatedPersonas: Annotation<InterviewerPersona[]>({

@@ -37,12 +37,16 @@ const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
 
 export async function POST(request: NextRequest) {
+  const apiStartTime = Date.now();
   console.log('🚀 [DEBUG] Curriculum generation started');
+  console.log('⏱️  [TIMING] API call received at:', new Date().toISOString());
 
   try {
     // Check authentication using Supabase
     const supabaseAuth = await createClient();
+    const authStartTime = Date.now();
     const { data: { user }, error: userError } = await supabaseAuth.auth.getUser();
+    console.log(`⏱️  [TIMING] Auth check: ${Date.now() - authStartTime}ms`);
 
     console.log('🔐 [DEBUG] Auth check:', {
       userExists: !!user,
@@ -65,6 +69,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json() as {
       userInput?: string;  // Frontend sends userInput
       input?: string;      // Fallback for backwards compatibility
+      mode?: 'cv_round_only' | 'full';  // 🆕 NEW: Generation mode
+      existingCurriculumId?: string;    // 🆕 NEW: For updates
       options?: Partial<CurriculumAgentOptions> | null;
       userProfile?: {
         excitement?: string;
@@ -82,13 +88,23 @@ export async function POST(request: NextRequest) {
         cv_analysis_id?: string; // 🔗 CV analysis ID for linking
       } | null;
     };
-    const { userInput, input, options = {}, userProfile, cvData } = body;
+    const {
+      userInput,
+      input,
+      mode = 'full',                    // 🆕 NEW: Default to full
+      existingCurriculumId,             // 🆕 NEW
+      options = {},
+      userProfile,
+      cvData
+    } = body;
     const finalInput = userInput || input;  // Use userInput if available, fallback to input
 
     console.log('📝 [DEBUG] Request body parsed:', {
       hasUserInput: !!userInput,
       hasInput: !!input,
       finalInput: finalInput?.substring(0, 50) + '...',
+      mode,                              // 🆕 NEW
+      existingCurriculumId,              // 🆕 NEW
       hasUserProfile: !!userProfile,
       hasCvData: !!cvData,
       cvDataKeys: cvData ? Object.keys(cvData) : []
@@ -109,6 +125,40 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('✅ [DEBUG] Input validation passed');
+
+    // 🆕 NEW: Validate update requests
+    if (mode === 'full' && existingCurriculumId) {
+      console.log(`🔄 [DEBUG] Validating update request for curriculum: ${existingCurriculumId}`);
+
+      const supabase = createSupabaseClient(
+        SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY
+      );
+
+      const { data: existing, error: fetchError } = await supabase
+        .from('curricula')
+        .select('generation_status')
+        .eq('id', existingCurriculumId)
+        .single();
+
+      if (fetchError || !existing) {
+        console.log(`❌ [DEBUG] Curriculum not found: ${existingCurriculumId}`);
+        return NextResponse.json(
+          { error: 'Curriculum not found for update' },
+          { status: 404 }
+        );
+      }
+
+      if (existing.generation_status !== 'cv_round_only') {
+        console.log(`❌ [DEBUG] Invalid status for update: ${existing.generation_status}`);
+        return NextResponse.json(
+          { error: 'Can only update curricula in cv_round_only status' },
+          { status: 400 }
+        );
+      }
+
+      console.log(`✅ [DEBUG] Update validation passed`);
+    }
 
     console.log('🔧 [DEBUG] Checking environment variables:', {
       SUPABASE_URL: SUPABASE_URL ? 'present' : 'missing',
@@ -166,7 +216,7 @@ export async function POST(request: NextRequest) {
 
     const agent = createCurriculumAgent(
       SUPABASE_URL,
-      SUPABASE_ANON_KEY,
+      process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY,  // ✅ Use service role to bypass RLS
       GOOGLE_API_KEY,
       {
         skipSchemaValidation: process.env.NODE_ENV === 'development',
@@ -174,8 +224,11 @@ export async function POST(request: NextRequest) {
       }
     );
 
-    // Start generation (this may take 30-60 seconds)
-    console.log(`[Curriculum] Starting generation for user ${userId}: ${finalInput.substring(0, 100)}...`);
+    // 🆕 MODIFIED: Start generation with mode
+    console.log(`[Curriculum] Starting generation: mode=${mode}, user=${userId}, input=${finalInput.substring(0, 100)}...`);
+    if (existingCurriculumId) {
+      console.log(`[Curriculum] Updating existing curriculum: ${existingCurriculumId}`);
+    }
     if (userProfile) {
       const areas = userProfile.weakAreas?.join(', ') || 'none specified';
       console.log(`[Curriculum] Personalization: Concerns: ${userProfile.concerns || 'none'}, Weak areas: ${areas}`);
@@ -194,10 +247,21 @@ export async function POST(request: NextRequest) {
     let duration: number;
 
     try {
-      curriculumId = await agent.generate(finalInput, userProfile, cvData);
+      // 🆕 MODIFIED: Pass mode options to agent
+      curriculumId = await agent.generate(
+        finalInput,
+        userProfile,
+        cvData,
+        {
+          mode,
+          existingCurriculumId,
+          userId, // ✅ Pass userId for RLS
+        }
+      );
+
       duration = (Date.now() - startTime) / 1000;
 
-      console.log(`✅ [DEBUG] Generated ${curriculumId} in ${duration}s for user ${userId}`);
+      console.log(`✅ [DEBUG] Generated ${curriculumId} in ${duration}s (mode: ${mode}) for user ${userId}`);
       console.log(`[Curriculum] Generated ${curriculumId} in ${duration}s for user ${userId}`);
     } catch (generateError) {
       console.error('❌ [DEBUG] Agent.generate() failed:', {
@@ -229,9 +293,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Return the generated curriculum
+    const totalApiTime = Date.now() - apiStartTime;
+    console.log(`\n⏱️  [TIMING] ═══════════════════════════════════════════`);
+    console.log(`⏱️  [TIMING] Agent generation: ${duration}s`);
+    console.log(`⏱️  [TIMING] Total API time: ${(totalApiTime / 1000).toFixed(2)}s (${totalApiTime}ms)`);
+    console.log(`⏱️  [TIMING] Mode: ${mode}`);
+    console.log(`⏱️  [TIMING] ═══════════════════════════════════════════\n`);
+
     return NextResponse.json({
       success: true,
       curriculum_id: curriculumId,
+      mode,                              // 🆕 NEW
+      generation_status: curriculum.generation_status,  // 🆕 NEW
       credits_used: CURRICULUM_COST,
       remaining_credits: availableCredits - CURRICULUM_COST,
       generation_time: duration,
@@ -242,6 +315,7 @@ export async function POST(request: NextRequest) {
         total_rounds: curriculum.total_rounds,
         difficulty_level: curriculum.difficulty_level,
         completeness_score: curriculum.completeness_score,
+        generation_status: curriculum.generation_status,  // 🆕 NEW
         rounds: (curriculum.curriculum_rounds ?? [])
           .slice()
           .sort((a, b) => a.round_number - b.round_number),

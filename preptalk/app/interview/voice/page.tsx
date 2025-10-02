@@ -44,6 +44,7 @@ export default function VoiceInterviewPage({
   const [interviewSession, setInterviewSession] = useState<InterviewSession | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [durationMinutes, setDurationMinutes] = useState(30); // Default 30, will be updated
 
   // Interview state
   const [messages, setMessages] = useState<Message[]>([]);
@@ -57,6 +58,7 @@ export default function VoiceInterviewPage({
 
   // Use the exact hook pattern from the example
   const conversation = useConversationWithTimeManagement({
+    durationMinutes,
     onMessage: (message) => {
       console.log('🎙️ [VOICE] Message received:', { source: message.source, hasMessage: !!message.message, length: message.message?.length });
       setMessages((prev) => [...prev, message]);
@@ -122,6 +124,14 @@ export default function VoiceInterviewPage({
 
       const promptData = await promptResponse.json();
 
+      // 🎯 Set duration from round metadata (demo rounds get 2 minutes max)
+      const roundDuration = promptData.roundMetadata?.duration || 30;
+      const isDemo = promptData.roundMetadata?.roundType === 'recruiter_screen' && roundNumber === 1;
+      const effectiveDuration = isDemo ? Math.min(roundDuration, 2) : roundDuration;
+
+      console.log(`⏱️ [DEMO] Round duration: ${roundDuration}min, isDemo: ${isDemo}, effective: ${effectiveDuration}min`);
+      setDurationMinutes(effectiveDuration);
+
       // Get signed URL with voice randomization parameters
       const urlResponse = await fetch(`/api/speech-interview?curriculumId=${curriculumId}&roundNumber=${roundNumber}`);
       if (!urlResponse.ok) {
@@ -186,7 +196,13 @@ export default function VoiceInterviewPage({
     const interval = setInterval(() => {
       const status = conversation.getTimeStatus();
       setTimeStatus(status);
-    }, 10000); // Update every 10 seconds
+
+      // 🎯 Auto-end session when time runs out
+      if (status.remaining === 0 && conversation.status === 'connected') {
+        console.log('⏱️ [DEMO] Time limit reached, ending session');
+        handleSessionComplete();
+      }
+    }, 1000); // Update every second to catch time limit
 
     return () => clearInterval(interval);
   }, [conversation]);

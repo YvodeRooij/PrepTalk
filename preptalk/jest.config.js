@@ -16,6 +16,9 @@ const customJestConfig = {
     '<rootDir>/lib/**/*.test.{js,ts,tsx}',
     '<rootDir>/app/**/*.test.{js,ts,tsx}'
   ],
+  testEnvironmentOptions: {
+    customExportConditions: ['node', 'node-addons'],
+  },
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/$1',
   },
