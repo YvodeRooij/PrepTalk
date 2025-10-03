@@ -869,55 +869,76 @@ export async function generateReverseQuestions(
     'executive_final'
   ];
 
-  // Import angle-based prompt builder and schema (fixes duplicate questions issue)
-  const { buildAngleBasedReverseQuestionPrompt } = await import('../prompts/angle-based-reverse-questions-prompt');
-  const { ReverseQuestionSetSchema } = await import('../schemas');
+  // Import consolidated prompt builder and schema (single-context with constraint tracking)
+  const { buildConsolidatedReverseQuestionPrompt } = await import('../prompts/consolidated-reverse-questions-prompt');
+  const { AllRoundsReverseQuestionsSchema } = await import('../schemas');
 
-  // Build prompts for batch generation
-  const batchPrompts = roundTypes.map((roundType) => {
-    // Find matching persona to get best_asked_to
+  // Build best_asked_to mapping for all rounds
+  const bestAskedToMap: Record<string, string> = {};
+  roundTypes.forEach(roundType => {
     const persona = generatedPersonas.find(p => p.round_type === roundType);
-    const bestAskedTo = persona ?
+    bestAskedToMap[roundType] = persona ?
       getRoleFromPersona(persona.identity.role) :
       'interviewer';
+  });
 
-    const promptText = buildAngleBasedReverseQuestionPrompt({
-      competitiveIntelligence,
-      jobTitle: jobData?.title || 'this role',
-      companyName: jobData?.company_name || companyContext?.name || 'the company',
-      roundType,
-      bestAskedTo,
-      experienceLevel
-    });
-
-    return {
-      prompt: promptText,
-      systemPrompt: undefined // Use default system prompt from LLM provider
-    };
+  // Build single consolidated prompt for all rounds
+  const consolidatedPrompt = buildConsolidatedReverseQuestionPrompt({
+    competitiveIntelligence,
+    jobTitle: jobData?.title || 'this role',
+    companyName: jobData?.company_name || companyContext?.name || 'the company',
+    experienceLevel,
+    bestAskedToMap
   });
 
   try {
-    const batchStartTime = Date.now();
+    const startTime = Date.now();
 
-    console.log(`⏱️  [REVERSE QUESTIONS] Generating ${roundTypes.length} question sets in parallel...`);
+    console.log(`⏱️  [REVERSE QUESTIONS] Generating ALL ${roundTypes.length} rounds in single context with constraint tracking...`);
 
-    const reverseQuestionResults = await config.llmProvider?.batchStructured(
-      ReverseQuestionSetSchema,
-      'reverse_interview_questions',
-      batchPrompts
+    const allRoundsResults = await config.llmProvider?.batchStructured(
+      AllRoundsReverseQuestionsSchema,
+      'reverse_interview_questions', // Use existing task config
+      [{ prompt: consolidatedPrompt, systemPrompt: undefined }]
     );
 
-    const batchDuration = ((Date.now() - batchStartTime) / 1000).toFixed(1);
-    console.log(`⏱️  [REVERSE QUESTIONS BATCH] Generated ${reverseQuestionResults?.length} question sets in ${batchDuration}s`);
+    const allRoundsResult = allRoundsResults?.[0]; // Single prompt, take first result
 
-    // Transform into state structure
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`⏱️  [REVERSE QUESTIONS] Generated all rounds in ${duration}s`);
+
+    // Validate constraint
+    if (!allRoundsResult?.validation.constraint_satisfied) {
+      console.error('❌ [CONSTRAINT VIOLATION] Max-2 reuse constraint violated!');
+      console.error('   Fact usage:', allRoundsResult?.validation.fact_usage_count);
+      console.error('   Warnings:', allRoundsResult?.validation.warnings);
+
+      // For now, continue with warning (in future, could retry)
+      console.warn('⚠️  Continuing with potentially violating questions...');
+    } else {
+      console.log('✅ [CONSTRAINT SATISFIED] All facts used ≤ 2 times');
+    }
+
+    // Log fact usage statistics
+    console.log('📊 [FACT USAGE DISTRIBUTION]');
+    const usageCounts = allRoundsResult?.validation.fact_usage_count || [];
+    usageCounts.forEach(({ fact_id, count }) => {
+      const indicator = count > 2 ? '❌' : count === 2 ? '⚠️' : '✅';
+      console.log(`   ${indicator} ${fact_id}: ${count}x`);
+    });
+
+    // Transform to state structure
     const reverseQuestionSets: Record<NonTechnicalRoundType, any> = {} as any;
 
-    reverseQuestionResults?.forEach((questionSet, index) => {
-      const roundType = roundTypes[index];
-      reverseQuestionSets[roundType] = questionSet;
+    roundTypes.forEach(roundType => {
+      const questions = allRoundsResult?.questions[roundType] || [];
+      reverseQuestionSets[roundType] = {
+        questions,
+        round_context: `Generated with consolidated approach (max-2 constraint)`,
+        prioritization_tip: questions.length > 0 ? 'Ask questions based on interviewer\'s role and rapport' : ''
+      };
 
-      console.log(`  ✓ ${roundType}: ${questionSet.questions.length} questions`);
+      console.log(`  ✓ ${roundType}: ${questions.length} questions`);
     });
 
     // Calculate quality metrics
@@ -930,6 +951,8 @@ export async function generateReverseQuestions(
 
     return {
       reverseQuestionSets,
+      factAllocation: allRoundsResult?.fact_allocation, // NEW: Store for debugging
+      factUsageValidation: allRoundsResult?.validation, // NEW: Store for debugging
       currentStep: 'reverse_questions_generated',
       progress: 82 // After prep guides (80) but before structure (85)
     };
