@@ -82,7 +82,7 @@ export function AuthGuidanceBox({ onDismiss, className = '' }: AuthGuidanceBoxPr
             </div>
 
             <p className="text-xs text-center text-gray-600">
-              💡 Free forever • No credit card needed
+              💡 Start for Free  • No credit card needed
             </p>
           </div>
         </div>
