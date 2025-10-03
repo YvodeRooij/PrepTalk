@@ -1,0 +1,80 @@
+{
+  "timestamp": "2025-10-03T09:08:18.623Z",
+  "testConfig": {
+    "model": "claude-sonnet-4-5",
+    "temperature": 0,
+    "timeout": 180000,
+    "enableFullDataset": false
+  },
+  "results": {
+    "score_based": {
+      "variationName": "Score-Based Assignment (0-10)",
+      "accuracy": {
+        "primary": 50,
+        "secondary": 40,
+        "avoid": 55,
+        "overall": 49
+      },
+      "differentiation": {
+        "avgPrimaryPerRound": 1.2,
+        "avgSecondaryPerRound": 1.8,
+        "ciReuseRate": 25
+      },
+      "coverage": {
+        "roundsWithAdequateCI": 40,
+        "unusedCIFacts": 38
+      },
+      "latency": {
+        "avgMs": 40594,
+        "p95Ms": 40594
+      }
+    },
+    "binary_relevance": {
+      "variationName": "Binary Relevance (Primary/Secondary/Avoid)",
+      "accuracy": {
+        "primary": 50,
+        "secondary": 20,
+        "avoid": 75,
+        "overall": 49
+      },
+      "differentiation": {
+        "avgPrimaryPerRound": 2.8,
+        "avgSecondaryPerRound": 1.8,
+        "ciReuseRate": 75
+      },
+      "coverage": {
+        "roundsWithAdequateCI": 100,
+        "unusedCIFacts": 0
+      },
+      "latency": {
+        "avgMs": 129048,
+        "p95Ms": 129048
+      }
+    }
+  },
+  "winner": {
+    "variation": "score_based",
+    "metrics": {
+      "variationName": "Score-Based Assignment (0-10)",
+      "accuracy": {
+        "primary": 50,
+        "secondary": 40,
+        "avoid": 55,
+        "overall": 49
+      },
+      "differentiation": {
+        "avgPrimaryPerRound": 1.2,
+        "avgSecondaryPerRound": 1.8,
+        "ciReuseRate": 25
+      },
+      "coverage": {
+        "roundsWithAdequateCI": 40,
+        "unusedCIFacts": 38
+      },
+      "latency": {
+        "avgMs": 40594,
+        "p95Ms": 40594
+      }
+    }
+  }
+}

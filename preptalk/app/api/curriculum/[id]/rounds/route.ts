@@ -24,11 +24,16 @@ export async function GET(
     const curriculumId = params.id;
 
     // Verify curriculum ownership
+    // Note: curricula don't have user_id directly - we need to join through cv_analyses
     const { data: curriculum, error: curriculumError } = await supabase
       .from('curricula')
-      .select('id, user_id')
+      .select(`
+        id,
+        cv_analysis_id,
+        cv_analyses!inner(user_id)
+      `)
       .eq('id', curriculumId)
-      .eq('user_id', userId)
+      .eq('cv_analyses.user_id', userId)
       .single();
 
     if (curriculumError || !curriculum) {

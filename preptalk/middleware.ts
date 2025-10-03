@@ -50,10 +50,15 @@ export async function middleware(request: NextRequest) {
   }
 
   // Redirect authenticated users away from auth pages
-  if ((request.nextUrl.pathname.startsWith('/login') || 
+  if ((request.nextUrl.pathname.startsWith('/login') ||
        request.nextUrl.pathname.startsWith('/signup')) && user) {
-    const dashboardUrl = new URL('/dashboard', request.url);
-    return NextResponse.redirect(dashboardUrl);
+    // Preserve redirect parameter if exists
+    const redirectParam = request.nextUrl.searchParams.get('redirect');
+    const redirectUrl = redirectParam
+      ? new URL(redirectParam, request.url)
+      : new URL('/dashboard', request.url);
+
+    return NextResponse.redirect(redirectUrl);
   }
 
   return supabaseResponse;

@@ -119,6 +119,8 @@ export class CurriculumAgent {
       .addNode("fetch_sources", (state) => this.wrapWithProvider(fetchSourceData)(state))
       .addNode("validate_sources", (state) => this.wrapWithProvider(validateSources)(state), { ends: ["merge_research", "fallback_research"] })
       .addNode("merge_research", (state) => this.wrapWithProvider(mergeResearch)(state))
+      // Fallback node for when validation fails
+      .addNode("fallback_research", this.fallbackResearch.bind(this))
 
       // Research Phase
       .addNode("parse_job", (state) => this.wrapWithProvider(parseJob)(state))
@@ -160,10 +162,7 @@ export class CurriculumAgent {
       // evaluate_quality uses Command to route to save or refine
       .addEdge("refine_rounds", "evaluate_quality")
       .addEdge("save_curriculum", "__end__")
-
-      // Add fallback node for when validation fails
-      .addNode("fallback_research", this.fallbackResearch.bind(this))
-      .addEdge("fallback_research", "generate_rounds"); // Skip everything and go straight to generation since fallback provides all required data
+      .addEdge("fallback_research", "unified_context_engine"); // Continue to unified context, then persona generation
 
     return workflow.compile();
   }
@@ -177,7 +176,23 @@ export class CurriculumAgent {
       const enhancedConfig = {
         llmProvider: this.llmProvider
       };
-      return await nodeFunction(state, enhancedConfig);
+
+      // 🔍 DEBUG: Log candidatePrepGuides state before node execution
+      const nodeName = nodeFunction.name || 'unknown';
+      const hasPrepGuidesBefore = !!state.candidatePrepGuides;
+      const prepGuideKeysBefore = hasPrepGuidesBefore ? Object.keys(state.candidatePrepGuides) : [];
+
+      console.log(`🔍 [STATE BEFORE ${nodeName}] candidatePrepGuides: ${hasPrepGuidesBefore ? `[${prepGuideKeysBefore.join(', ')}]` : 'undefined'}`);
+
+      const result = await nodeFunction(state, enhancedConfig);
+
+      // 🔍 DEBUG: Log candidatePrepGuides state after node execution
+      const returnsPrepGuides = 'candidatePrepGuides' in result;
+      const prepGuideKeysInResult = returnsPrepGuides ? Object.keys(result.candidatePrepGuides || {}) : [];
+
+      console.log(`🔍 [STATE AFTER ${nodeName}] returns candidatePrepGuides: ${returnsPrepGuides ? `[${prepGuideKeysInResult.join(', ')}]` : 'no'}`);
+
+      return result;
     }) as T;
   }
 
@@ -226,6 +241,12 @@ export class CurriculumAgent {
         confidenceBuilders: ['Frame career transition as strategic growth opportunity'],
         ciIntegrationStrategy: 'Weave company research naturally into responses about motivation and fit',
         personalizedApproach: 'Supportive coaching approach focusing on transferable skills and growth mindset'
+      },
+      // Add minimal role patterns for structure design
+      rolePatterns: {
+        typical_rounds: 5,
+        expected_depth: 'standard',
+        focus_areas: ['Technical skills', 'Communication', 'Problem solving', 'Collaboration'],
       },
       // Add minimal structure so generation can proceed
       structure: {

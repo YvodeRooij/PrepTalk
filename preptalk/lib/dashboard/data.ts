@@ -19,6 +19,12 @@ export type QuestionGuide = {
   persona: string;
   context: string;
   prompts: string[];
+  // Enhanced fields for reverse questions
+  ci_facts?: string[];
+  why_they_work?: string[];
+  green_flags?: string[];
+  red_flags?: string[];
+  expected_insights?: string[];
 };
 
 export type DashboardUser = {
@@ -174,6 +180,24 @@ const candidatePrepGuideSchema = z
           .passthrough()
       )
       .optional(),
+    reverse_questions: z
+      .array(
+        z
+          .object({
+            id: z.string().optional(),
+            question: z.string(),
+            ci_fact: z.string().optional(),
+            ci_source_type: z.string().optional(),
+            success_pattern: z.string().optional(),
+            why_it_works: z.string().optional(),
+            green_flags: z.array(z.string()).optional(),
+            red_flags: z.array(z.string()).optional(),
+            expected_insights: z.array(z.string()).optional(),
+            timing: z.string().optional(),
+          })
+          .passthrough()
+      )
+      .optional(),
   })
   .passthrough();
 
@@ -292,6 +316,25 @@ function buildQuestionGuides(
 ): QuestionGuide[] {
   const guides = rounds
     .map((round) => {
+      // NEW: Prioritize reverse_questions over standard_questions_prep
+      const reverseQuestions = round.candidate_prep_guide?.reverse_questions ?? [];
+
+      if (reverseQuestions.length > 0) {
+        // Use reverse questions (questions candidate asks interviewer)
+        return {
+          id: `round-${round.round_number}-reverse-questions`,
+          persona: derivePersona(round),
+          context: `Questions to ask during ${round.title}`,
+          prompts: reverseQuestions.slice(0, 4).map((q: any) => q.question),
+          ci_facts: reverseQuestions.map((q: any) => q.ci_fact),
+          why_they_work: reverseQuestions.map((q: any) => q.why_it_works),
+          green_flags: reverseQuestions.flatMap((q: any) => q.green_flags || []),
+          red_flags: reverseQuestions.flatMap((q: any) => q.red_flags || []),
+          expected_insights: reverseQuestions.flatMap((q: any) => q.expected_insights || []),
+        } satisfies QuestionGuide;
+      }
+
+      // Fallback to standard_questions_prep if no reverse questions
       const prompts = round.candidate_prep_guide?.standard_questions_prep
         ?.map((item) => item.question)
         .filter(Boolean) ?? [];

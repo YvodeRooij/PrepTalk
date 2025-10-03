@@ -6,7 +6,8 @@ import { LLMProviderService } from '../../providers/llm-provider-service';
 import {
   InterviewerPersonaSchema,
   StandardQuestionSchema,
-  CandidatePrepSchema
+  CandidatePrepSchema,
+  type CandidatePrep
 } from '../schemas';
 import { z } from 'zod';
 
@@ -58,6 +59,19 @@ export interface CandidatePrep {
     why_asked: string;
     approach: string;
     key_points: string[];
+  }>;
+  reverse_questions: Array<{
+    id: string;
+    question_text: string;
+    ci_fact_used: string;
+    ci_source_type: string;
+    success_pattern: string;
+    why_this_works: string;
+    green_flags: string[];
+    red_flags: string[];
+    expected_insights: string[];
+    best_timing: string;
+    natural_phrasing_tip: string | null;
   }>;
 }
 
@@ -260,6 +274,114 @@ function getFriendlyStyle(userProfile: any): string {
   }
 
   return 'professional and supportive';
+}
+
+function getRoundAppropriatenessGuidance(roundType: string): string {
+  const guidance: Record<string, string> = {
+    'recruiter_screen': `
+Appropriate for recruiter: Process, timeline, high-level culture, role clarity, growth overview
+AVOID: Deep technical details, executive strategy, compensation details
+Tone: Enthusiastic, professional, curious about the opportunity`,
+
+    'behavioral_deep_dive': `
+Appropriate for hiring manager: Team dynamics, day-to-day work, manager's style, success metrics, collaboration
+AVOID: Generic surface-level questions, overly tactical process details
+Tone: Collaborative, practical, focused on how work gets done`,
+
+    'culture_values_alignment': `
+Appropriate for culture interview: How values manifest daily, concrete culture examples, work-life, team health, decision-making
+AVOID: Softball questions, direct comparisons to competitors
+Tone: Authentic, values-driven, seeking genuine evidence`,
+
+    'strategic_role_discussion': `
+Appropriate for senior leader: Department priorities, role impact on objectives, competitive positioning, role evolution, strategic initiatives
+AVOID: Micro-level details, pure technical questions
+Tone: Strategic, business-minded, thinking beyond immediate role`,
+
+    'executive_final': `
+Appropriate for C-level: Company vision (2-5 years), leadership philosophy, biggest challenges/opportunities, industry trends, market positioning
+AVOID: Day-to-day tactical questions, questions they've answered 100 times in media
+Tone: Visionary, leadership-oriented, company/market level thinking`
+  };
+
+  return guidance[roundType] || guidance['recruiter_screen'];
+}
+
+function getDifferentiationGuidance(roundType: string): string {
+  const guidance: Record<string, string> = {
+    'recruiter_screen': `
+**ANGLE FOR THIS ROUND: Company Selling Points & Role Clarity**
+Focus: Why this company? What makes it attractive? What will I actually do? Role scope and team structure.
+
+AVOID angles used in other rounds:
+- ❌ Career growth opportunities (other rounds cover this)
+- ❌ Team collaboration processes (behavioral round)
+- ❌ Competitive tactics (strategic round)
+- ❌ Long-term vision (executive round)
+
+Example questions for THIS round:
+✅ "What makes [company] stand out given [CI fact like ranking]?"
+✅ "How does [CI fact] shape what this role entails day-to-day?"
+✅ "Given [CI fact], what does the team structure look like for this role?"`,
+
+    'behavioral_deep_dive': `
+**ANGLE FOR THIS ROUND: Team Process & Collaboration**
+Focus: How teams work together, day-to-day workflows, cross-functional dynamics
+
+AVOID angles used in other rounds:
+- ❌ Personal career growth (other rounds cover this)
+- ❌ Industry vision (executive round)
+- ❌ Company values (culture round)
+
+Example questions for THIS round:
+✅ "How has [CI fact] changed how the team collaborates?"
+✅ "What's the hardest part of coordinating around [CI fact]?"
+✅ "Walk me through how the team manages [challenge from CI fact]"`,
+
+    'culture_values_alignment': `
+**ANGLE FOR THIS ROUND: Values Manifestation & Work Culture**
+Focus: How company values show up in real decisions, culture in action
+
+AVOID angles used in other rounds:
+- ❌ Competitive positioning (strategic round)
+- ❌ Tactical processes (behavioral round)
+- ❌ Market trends (executive round)
+
+Example questions for THIS round:
+✅ "How does [CI fact] reflect the company's values around [value]?"
+✅ "Can you give a concrete example of how [CI fact] shows the culture in action?"
+✅ "Does [CI fact] change how the team thinks about [cultural aspect]?"`,
+
+    'strategic_role_discussion': `
+**ANGLE FOR THIS ROUND: Competitive Positioning & Tactical Execution**
+Focus: How the company competes, market differentiation, go-to-market strategy
+
+AVOID angles used in other rounds:
+- ❌ Personal growth (other rounds cover this)
+- ❌ Cultural values (culture round)
+- ❌ Long-term industry vision (executive round)
+
+Example questions for THIS round:
+✅ "How does [CI fact] position us against [competitor]?"
+✅ "How would you leverage [CI fact] in [specific tactical scenario]?"
+✅ "What competitive advantage does [CI fact] create?"`,
+
+    'executive_final': `
+**ANGLE FOR THIS ROUND: Industry Vision & Long-term Strategy**
+Focus: 3-5 year outlook, market evolution, strategic bets
+
+AVOID angles used in other rounds:
+- ❌ Day-to-day processes (behavioral round)
+- ❌ Personal career path (other rounds cover this)
+- ❌ Tactical execution (strategic round)
+
+Example questions for THIS round:
+✅ "Given [CI fact], how do you see the industry evolving?"
+✅ "What strategic bets is [company] making based on [CI fact]?"
+✅ "In 3-5 years, how might [CI fact] reshape the market?"`
+  };
+
+  return guidance[roundType] || guidance['recruiter_screen'];
 }
 
 /**
@@ -585,7 +707,7 @@ export async function generateCandidatePrep(
   if (state.mode === 'cv_round_only') {
     console.log('⚡ [CV DEMO] Skipping prep guides for fast demo');
     return {
-      candidatePrepGuides: {},
+      candidatePrepGuides: {} as Record<NonTechnicalRoundType, CandidatePrep>,
       currentStep: 'prep_guides_skipped_demo'
     };
   }
@@ -598,56 +720,124 @@ export async function generateCandidatePrep(
 
   const { competitiveIntelligence, standardQuestionSets, jobData } = state;
 
-  // OOTB Structured Output Schema for prep guides
-  const PrepGuideSchema = z.object({
-    strategic_advantages_talking_points: z.array(z.object({
-      advantage: z.string().describe('Strategic advantage'),
-      how_to_weave_in: z.string().describe('How to naturally mention this'),
-      example_response: z.string().describe('Sample response showing natural integration')
-    })).max(3).describe('Strategic advantages talking points'),
-    recent_developments_talking_points: z.array(z.object({
-      development: z.string().describe('Recent development'),
-      relevance_to_role: z.string().describe('Why this matters for this role'),
-      conversation_starters: z.array(z.string()).max(3).describe('Natural conversation starters')
-    })).max(3).describe('Recent developments talking points'),
-    great_answers_sound_like: z.array(z.string()).max(5).describe('What exceptional answers demonstrate'),
-    company_knowledge_demonstration: z.array(z.string()).max(5).describe('Ways to show deep understanding'),
-    standard_questions_prep: z.array(z.object({
-      question: z.string().describe('Standard interview question'),
-      why_asked: z.string().describe('Why interviewers ask this question'),
-      approach: z.string().describe('How to approach answering'),
-      key_points: z.array(z.string()).max(4).describe('Key points to cover')
-    })).max(5).describe('Standard questions preparation guide')
-  });
-
   // Build all prompts for batch processing
   const roundTypes = Object.keys(standardQuestionSets) as NonTechnicalRoundType[];
   const batchPrompts = roundTypes.map((roundType) => {
     const questions = standardQuestionSets[roundType];
     return {
-      prompt: `Create candidate preparation guidance for ${roundType.replace('_', ' ')} interview questions.
+      prompt: `You are an expert interview preparation coach. Create comprehensive preparation guidance for a ${roundType.replace('_', ' ')} interview round.
 
-JOB CONTEXT:
-- Role: ${jobData.title} at ${jobData.company_name}
+**INTERVIEW CONTEXT:**
+- Company: ${jobData.company_name}
+- Role: ${jobData.title}
 - Level: ${jobData.level}
+- Round Type: ${roundType.replace('_', ' ')}
 
-COMPETITIVE INTELLIGENCE:
-- Strategic advantages: ${competitiveIntelligence.strategicAdvantages.join(', ')}
-- Recent developments: ${competitiveIntelligence.recentDevelopments.join(', ')}
-- Competitive positioning: ${competitiveIntelligence.competitivePositioning}
+**COMPETITIVE INTELLIGENCE:**
+Strategic Advantages:
+${competitiveIntelligence.strategicAdvantages.map(a => `- ${a}`).join('\n')}
 
-SAMPLE QUESTIONS FOR THIS ROUND:
+Recent Developments:
+${competitiveIntelligence.recentDevelopments.map(d => `- ${d}`).join('\n')}
+
+Competitive Positioning:
+${competitiveIntelligence.competitivePositioning}
+
+**SAMPLE QUESTIONS FOR THIS ROUND:**
 ${questions.slice(0, 3).map(q => `- ${q.text}`).join('\n')}
 
-Generate comprehensive preparation guidance that includes:
-1. Talking points for using competitive intelligence in answers
-2. Recognition training on what great answers look like
-3. Standard questions preparation guide with specific questions, why they're asked, how to approach them, and key points to cover
+---
 
-Focus on helping candidates:
-- Use competitive intelligence to give exceptional answers to standard questions
-- Demonstrate deep company understanding without sounding coached
-- Connect their experience to the company's unique competitive position`,
+**YOUR TASK:** Generate a structured prep guide with these exact sections:
+
+1. **ci_talking_points** - Competitive Intelligence Talking Points:
+
+   a) strategic_advantages (max 3 items):
+      - advantage: The specific competitive advantage
+      - how_to_weave_in: Natural way to incorporate this into answers
+      - example_response: Sample answer demonstrating how to mention it
+
+   b) recent_developments (max 3 items):
+      - development: The recent news/initiative
+      - relevance_to_role: Why this matters for this specific role
+      - conversation_starters: 3 natural ways to bring it up in conversation
+
+2. **recognition_training** - How to Excel:
+
+   a) what_great_answers_sound_like (max 5 items):
+      - Key characteristics that make answers stand out for this round type
+      - What interviewers listen for in exceptional responses
+
+   b) how_to_demonstrate_company_knowledge (max 5 items):
+      - Specific ways to show research naturally
+      - How to reference company info without sounding rehearsed
+
+3. **standard_questions_prep** (max 5 questions):
+   For each question provide:
+   - question: Common interview question for this round
+   - why_asked: What the interviewer is really assessing
+   - approach: How to structure your answer (e.g., STAR method)
+   - key_points: 4 critical elements to include in your response
+
+4. **reverse_questions** (3-5 questions) - Questions the CANDIDATE asks the INTERVIEWER:
+
+   **CRITICAL CONSTRAINT: Use ONLY the CI facts you selected in section 1 (ci_talking_points).**
+
+   Generate 3-5 smart reverse interview questions that demonstrate research and lead to insights.
+
+   For EACH question, you MUST:
+
+   a) Base it EXCLUSIVELY on ONE CI fact from section 1:
+      - Use ONLY the strategic advantages you selected (max 3)
+      - OR the recent developments you selected (max 3)
+      - DO NOT use any other CI facts not in your section 1
+
+   b) Follow proven success patterns:
+      - Pattern 1: Recent Event → Team Impact
+        Example: "How has [recent development from section 1] changed [team aspect]?"
+
+      - Pattern 2: Real-World Tradeoff
+        Example: "With [strategic advantage from section 1], how does the team balance [X] while maintaining [Y]?"
+
+      - Pattern 3: Concrete Example Request
+        Example: "Can you give me a concrete example of [abstract concept from section 1]?"
+
+      - Pattern 4: Scale Challenge + Solution
+        Example: "What's the hardest part of [challenge from section 1], and how does the team handle it?"
+
+      - Pattern 5: Day-to-Day Impact
+        Example: "How has [change from section 1] changed the day-to-day work?"
+
+   c) Make it natural and conversational:
+      - ❌ BAD: "What was the biggest challenge YOU faced during..."
+      - ✅ GOOD: "What was the biggest challenge THE TEAM faced during..."
+      - Ask about TEAM/PROCESS, not the individual's personal experience
+
+   d) Match the round appropriateness:
+      ${getRoundAppropriatenessGuidance(roundType)}
+
+   e) **CRITICAL: Ensure differentiation across rounds:**
+      ${getDifferentiationGuidance(roundType)}
+
+   For EACH question provide ALL these fields:
+   - id: Unique identifier (e.g., "${roundType}-rq1", "${roundType}-rq2", etc.)
+   - question_text: The actual question (min 30 chars, natural language)
+   - ci_fact_used: EXACT CI fact from section 1 this is based on
+   - ci_source_type: Type (strategic_advantage or recent_development)
+   - success_pattern: Which pattern you followed (recent_event_team_impact, real_world_tradeoff, concrete_example, scale_challenge_solution, day_to_day_impact, future_growth, process_deepdive, comparative_framing)
+   - why_this_works: Brief explanation why this demonstrates research (min 50 chars)
+   - green_flags: 2-4 positive signals to listen for in response
+   - red_flags: 1-3 warning signals in response
+   - expected_insights: 2-4 things you should learn from their answer
+   - best_timing: When to ask (opening, mid_conversation, or closing)
+   - natural_phrasing_tip: How to phrase naturally (can be null)
+
+**IMPORTANT:**
+- Use ONLY the competitive intelligence you selected in section 1
+- Be specific to ${jobData.company_name} and this ${roundType.replace('_', ' ')} round
+- Make it actionable and tactical, not generic advice
+- Help the candidate leverage competitive insights to differentiate themselves
+- REVERSE QUESTIONS: Must use ONLY section 1 CI facts to ensure consistency`,
       systemPrompt: undefined
     };
   });
@@ -656,7 +846,7 @@ Focus on helping candidates:
     // 🚀 PARALLEL BATCH GENERATION - 5 prep guides in parallel with maxConcurrency: 5
     const batchStartTime = Date.now();
     const prepGuideResults = await config.llmProvider?.batchStructured(
-      PrepGuideSchema,
+      CandidatePrepSchema,
       'candidate_prep',
       batchPrompts
     );
@@ -667,21 +857,28 @@ Focus on helping candidates:
       throw new Error('No prep guides generated from batch structured output');
     }
 
+    // 🔬 DEBUG: Log first prep guide to verify LLM is returning data
+    console.log(`🔬 [DEBUG] Sample prep guide for round ${roundTypes[0]}:`);
+    const sample = prepGuideResults[0];
+    console.log(`   - ci_talking_points.strategic_advantages: ${sample.ci_talking_points?.strategic_advantages?.length || 0} items`);
+    console.log(`   - ci_talking_points.recent_developments: ${sample.ci_talking_points?.recent_developments?.length || 0} items`);
+    console.log(`   - recognition_training.what_great_answers_sound_like: ${sample.recognition_training?.what_great_answers_sound_like?.length || 0} items`);
+    console.log(`   - standard_questions_prep: ${sample.standard_questions_prep?.length || 0} items`);
+    console.log(`   - reverse_questions: ${sample.reverse_questions?.length || 0} items`);
+    if ((sample.ci_talking_points?.strategic_advantages?.length || 0) === 0) {
+      console.log(`   ⚠️  WARNING: LLM returned EMPTY arrays for prep guide!`);
+      console.log(`   📄 Full sample (first 500 chars): ${JSON.stringify(sample, null, 2).substring(0, 500)}`);
+    }
+    if ((sample.reverse_questions?.length || 0) === 0) {
+      console.log(`   ⚠️  WARNING: LLM returned NO reverse questions!`);
+    }
+
     // Transform batch results into prep guides
     const candidatePrepGuides: Record<NonTechnicalRoundType, CandidatePrep> = {} as any;
-    prepGuideResults.forEach((prepData, index) => {
+    prepGuideResults.forEach((prepData: CandidatePrep, index: number) => {
       const roundType = roundTypes[index];
-      candidatePrepGuides[roundType] = {
-        ci_talking_points: {
-          strategic_advantages: prepData.strategic_advantages_talking_points || [],
-          recent_developments: prepData.recent_developments_talking_points || []
-        },
-        recognition_training: {
-          what_great_answers_sound_like: prepData.great_answers_sound_like || [],
-          how_to_demonstrate_company_knowledge: prepData.company_knowledge_demonstration || []
-        },
-        standard_questions_prep: prepData.standard_questions_prep || []
-      };
+      // ✅ Schema now matches CandidatePrepSchema perfectly - no transformation needed!
+      candidatePrepGuides[roundType] = prepData;
     });
 
     console.log(`✅ Generated prep guides for ${Object.keys(candidatePrepGuides).length} rounds`);
@@ -713,6 +910,199 @@ Focus on helping candidates:
       warnings: [...(state.warnings || []), 'Batch prep guides generation failed, used fallback guides']
     };
   }
+}
+
+/**
+ * Node: Generate CI-powered reverse interview questions
+ * Creates smart questions that demonstrate deep company research
+ * Uses eval-driven prompt with explicit success patterns
+ */
+export async function generateReverseQuestions(
+  state: CurriculumState,
+  config: { llmProvider?: LLMProviderService }
+): Promise<Partial<CurriculumState>> {
+
+  console.log('🔄 [REVERSE QUESTIONS] Generating CI-powered reverse interview questions...');
+
+  if (!state.competitiveIntelligence || !state.generatedPersonas) {
+    console.warn('⚠️  Missing required state for reverse question generation');
+    return {
+      reverseQuestionSets: {},
+      warnings: ['Skipped reverse questions - missing CI or personas']
+    };
+  }
+
+  const { competitiveIntelligence, jobData, companyContext, generatedPersonas } = state;
+
+  // Get experience level from CV or default to 'mid'
+  const experienceLevel = state.cvData?.insights?.experienceLevel || 'mid';
+
+  // Generate questions for each non-technical round type
+  const roundTypes: NonTechnicalRoundType[] = [
+    'recruiter_screen',
+    'behavioral_deep_dive',
+    'culture_values_alignment',
+    'strategic_role_discussion',
+    'executive_final'
+  ];
+
+  // Import angle-based prompt builder and schema (fixes duplicate questions issue)
+  const { buildAngleBasedReverseQuestionPrompt } = await import('../prompts/angle-based-reverse-questions-prompt');
+  const { ReverseQuestionSetSchema } = await import('../schemas');
+
+  // Build prompts for batch generation
+  const batchPrompts = roundTypes.map((roundType) => {
+    // Find matching persona to get best_asked_to
+    const persona = generatedPersonas.find(p => p.round_type === roundType);
+    const bestAskedTo = persona ?
+      getRoleFromPersona(persona.identity.role) :
+      'interviewer';
+
+    const promptText = buildAngleBasedReverseQuestionPrompt({
+      competitiveIntelligence,
+      jobTitle: jobData?.title || 'this role',
+      companyName: jobData?.company_name || companyContext?.name || 'the company',
+      roundType,
+      bestAskedTo,
+      experienceLevel
+    });
+
+    return {
+      prompt: promptText,
+      systemPrompt: undefined // Use default system prompt from LLM provider
+    };
+  });
+
+  try {
+    const startTime = Date.now();
+
+    console.log(`⏱️  [REVERSE QUESTIONS] Generating ${roundTypes.length} rounds with angle-based differentiation...`);
+
+    const reverseQuestionResults = await config.llmProvider?.batchStructured(
+      ReverseQuestionSetSchema,
+      'reverse_interview_questions',
+      batchPrompts
+    );
+
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`⏱️  [REVERSE QUESTIONS] Generated ${reverseQuestionResults?.length} question sets in ${duration}s`);
+
+    // Transform batch results to state structure
+    const reverseQuestionSets: Record<NonTechnicalRoundType, any> = {} as any;
+
+    reverseQuestionResults?.forEach((questionSet, index) => {
+      const roundType = roundTypes[index];
+      reverseQuestionSets[roundType] = questionSet; // Already has questions, round_context, prioritization_tip
+      console.log(`  ✓ ${roundType}: ${questionSet.questions.length} questions`);
+    });
+
+    // Calculate quality metrics
+    const totalQuestions = Object.values(reverseQuestionSets).reduce(
+      (sum: number, set: any) => sum + set.questions.length,
+      0
+    );
+
+    console.log(`✅ [REVERSE QUESTIONS] Generated ${totalQuestions} total questions across ${Object.keys(reverseQuestionSets).length} rounds`);
+
+    return {
+      reverseQuestionSets,
+      currentStep: 'reverse_questions_generated',
+      progress: 82 // After prep guides (80) but before structure (85)
+    };
+
+  } catch (error) {
+    console.error('❌ [REVERSE QUESTIONS] Generation failed:', error);
+
+    // Fallback: Generate basic reverse questions from CI
+    console.log('⚠️  [REVERSE QUESTIONS] Using fallback generator...');
+
+    const fallbackSets = generateFallbackReverseQuestions(
+      competitiveIntelligence,
+      jobData,
+      roundTypes
+    );
+
+    return {
+      reverseQuestionSets: fallbackSets,
+      currentStep: 'reverse_questions_generated',
+      warnings: ['Reverse question generation failed, used fallback questions']
+    };
+  }
+}
+
+/**
+ * Helper: Extract role type from persona role string
+ */
+function getRoleFromPersona(roleString: string): string {
+  const lower = roleString.toLowerCase();
+  if (lower.includes('recruiter') || lower.includes('talent')) return 'recruiter';
+  if (lower.includes('vp') || lower.includes('executive') || lower.includes('chief')) return 'executive';
+  if (lower.includes('director') || lower.includes('head of')) return 'skip_level';
+  if (lower.includes('manager')) return 'hiring_manager';
+  return 'peer';
+}
+
+/**
+ * Fallback generator for when LLM fails
+ */
+function generateFallbackReverseQuestions(
+  ci: any,
+  jobData: any,
+  roundTypes: NonTechnicalRoundType[]
+): Record<NonTechnicalRoundType, any> {
+
+  const fallbackSets: Record<string, any> = {};
+
+  // Create basic fallback questions using CI if available
+  const strategicAdvantage = ci.strategicAdvantages?.[0] || 'the company\'s competitive position';
+  const recentDev = ci.recentDevelopments?.[0] || 'recent company developments';
+
+  roundTypes.forEach(roundType => {
+    fallbackSets[roundType] = {
+      questions: [
+        {
+          id: `fallback-${roundType}-1`,
+          question_text: `How has ${recentDev.toLowerCase()} impacted the team's priorities?`,
+          ci_fact_used: recentDev,
+          ci_source_type: 'recent_development',
+          success_pattern: 'recent_event_team_impact',
+          why_this_works: 'Shows awareness of company changes and interest in team dynamics',
+          green_flags: ['Specific impact mentioned', 'Shows team adaptability'],
+          red_flags: ['Vague or dismissive answer'],
+          expected_insights: ['Team responsiveness to change', 'Strategic priorities'],
+          best_timing: 'mid_conversation'
+        },
+        {
+          id: `fallback-${roundType}-2`,
+          question_text: `Can you give me a concrete example of how the team works together on complex challenges?`,
+          ci_fact_used: 'Team collaboration',
+          ci_source_type: 'growth_area',
+          success_pattern: 'concrete_example',
+          why_this_works: 'Tests if collaboration claims are real',
+          green_flags: ['Specific story shared', 'Clear team dynamics'],
+          red_flags: ['Generic answer', 'Can\'t provide example'],
+          expected_insights: ['Real collaboration patterns', 'Team culture'],
+          best_timing: 'mid_conversation'
+        },
+        {
+          id: `fallback-${roundType}-3`,
+          question_text: `What growth opportunities might emerge for someone joining the team now?`,
+          ci_fact_used: 'Career growth',
+          ci_source_type: 'growth_area',
+          success_pattern: 'future_growth',
+          why_this_works: 'Forward-looking, shows ambition',
+          green_flags: ['Specific growth paths mentioned', 'Investment in development'],
+          red_flags: ['No clear answer', 'Growth not prioritized'],
+          expected_insights: ['Career trajectory', 'Learning opportunities'],
+          best_timing: 'closing'
+        }
+      ],
+      round_context: `Basic questions for ${roundType}`,
+      prioritization_tip: 'Ask question 1 first if time is limited'
+    };
+  });
+
+  return fallbackSets as Record<NonTechnicalRoundType, any>;
 }
 
 // Helper function to extract user context (backwards compatible)

@@ -123,6 +123,13 @@ export interface RoundDefinition {
 }
 
 export type RoundType =
+  // Non-technical persona-based rounds (new system)
+  | 'recruiter_screen'
+  | 'behavioral_deep_dive'
+  | 'culture_values_alignment'
+  | 'strategic_role_discussion'
+  | 'executive_final'
+  // Legacy technical rounds (kept for backwards compatibility)
   | 'phone_screen'
   | 'technical_screen'
   | 'coding'

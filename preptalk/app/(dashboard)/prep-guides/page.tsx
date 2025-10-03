@@ -3,10 +3,10 @@ import Link from 'next/link';
 import { BookOpen, Target, Lightbulb, MessageSquare } from 'lucide-react';
 
 interface PrepGuideQuestion {
-  type: string;
-  category: string;
   question: string;
-  difficulty: string;
+  why_asked: string;
+  approach: string;
+  key_points: string[];
 }
 
 interface CITalkingPoint {
@@ -199,37 +199,52 @@ function PrepGuideCard({ round }: { round: PrepGuideRound }) {
           <section>
             <div className="flex items-center gap-2 mb-4">
               <MessageSquare className="h-5 w-5 text-blue-600" />
-              <h3 className="text-lg font-semibold text-gray-900">Expected Questions</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Standard Questions Prep</h3>
             </div>
-            <div className="space-y-3">
+            <div className="space-y-4">
               {guide.standard_questions_prep.map((q, idx) => (
                 <div
                   key={idx}
-                  className="rounded-lg border border-gray-200 bg-gray-50 p-4"
+                  className="rounded-lg border border-gray-200 bg-white p-5"
                 >
-                  <div className="flex items-start gap-3">
-                    <span className="mt-1 inline-block h-6 w-6 flex-shrink-0 rounded-full bg-blue-100 text-center text-xs font-semibold leading-6 text-blue-700">
-                      {idx + 1}
-                    </span>
-                    <div className="flex-1 space-y-2">
-                      <p className="text-sm font-medium text-gray-900">{q.question}</p>
-                      <div className="flex flex-wrap gap-2">
-                        <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
-                          {q.category}
-                        </span>
-                        <span className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs font-medium text-gray-600">
-                          {q.type}
-                        </span>
-                        <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${
-                          q.difficulty === 'hard'
-                            ? 'border-red-200 bg-red-50 text-red-700'
-                            : q.difficulty === 'medium'
-                            ? 'border-yellow-200 bg-yellow-50 text-yellow-700'
-                            : 'border-green-200 bg-green-50 text-green-700'
-                        }`}>
-                          {q.difficulty}
-                        </span>
-                      </div>
+                  <div className="space-y-3">
+                    {/* Question */}
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 inline-block h-6 w-6 flex-shrink-0 rounded-full bg-blue-100 text-center text-xs font-semibold leading-6 text-blue-700">
+                        Q{idx + 1}
+                      </span>
+                      <p className="text-base font-semibold text-gray-900">{q.question}</p>
+                    </div>
+
+                    {/* Why Asked */}
+                    <div className="ml-9 rounded-lg bg-blue-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-700 mb-1">
+                        Why it's asked:
+                      </p>
+                      <p className="text-sm text-blue-900">{q.why_asked}</p>
+                    </div>
+
+                    {/* Approach */}
+                    <div className="ml-9 rounded-lg bg-green-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-green-700 mb-1">
+                        How to approach:
+                      </p>
+                      <p className="text-sm text-green-900">{q.approach}</p>
+                    </div>
+
+                    {/* Key Points */}
+                    <div className="ml-9 rounded-lg bg-purple-50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-purple-700 mb-2">
+                        Key points to cover:
+                      </p>
+                      <ul className="space-y-1.5">
+                        {q.key_points.map((point, pIdx) => (
+                          <li key={pIdx} className="flex gap-2">
+                            <span className="mt-1.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-purple-600" />
+                            <span className="text-sm text-purple-900">{point}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   </div>
                 </div>

@@ -45,6 +45,63 @@ export const StandardQuestionSchema = z.object({
   time_allocation_minutes: z.number().int().min(2).max(10).describe('Recommended time allocation')
 });
 
+// ============================================
+// REVERSE INTERVIEW QUESTIONS (Questions Candidate Asks Interviewer)
+// ============================================
+
+/**
+ * Success pattern types based on eval analysis
+ */
+export const ReverseQuestionPatternEnum = z.enum([
+  'recent_event_team_impact',
+  'real_world_tradeoff',
+  'concrete_example',
+  'scale_challenge_solution',
+  'day_to_day_impact',
+  'future_growth',
+  'process_deepdive',
+  'comparative_framing'
+]);
+
+/**
+ * CI source types
+ */
+export const CISourceTypeEnum = z.enum([
+  'strategic_advantage',
+  'recent_development',
+  'competitive_comparison',
+  'scale_challenge',
+  'tech_change',
+  'growth_area'
+]);
+
+/**
+ * Individual reverse interview question schema
+ * Optimized for LLM structured output with eval-driven design
+ */
+export const ReverseQuestionSchema = z.object({
+  id: z.string().describe('Unique question identifier'),
+  question_text: z.string().min(30).describe('The reverse interview question - natural and conversational'),
+
+  // CI Foundation (what makes this question smart)
+  ci_fact_used: z.string().describe('Specific competitive intelligence fact this question is based on'),
+  ci_source_type: CISourceTypeEnum.describe('Type of CI used'),
+
+  // Pattern matching
+  success_pattern: ReverseQuestionPatternEnum.describe('Which proven success pattern this follows'),
+  why_this_works: z.string().min(50).describe('Why this question demonstrates research and will lead to insights'),
+
+  // Answer intelligence
+  green_flags: z.array(z.string()).min(2).max(4).describe('Positive signals to listen for in interviewer response'),
+  red_flags: z.array(z.string()).min(1).max(3).describe('Warning signals in interviewer response'),
+  expected_insights: z.array(z.string()).min(2).max(4).describe('What you should learn from their answer'),
+
+  // Delivery guidance
+  best_timing: z.enum(['opening', 'mid_conversation', 'closing']).describe('When to ask during interview'),
+  // OpenAI compatibility: Use .nullable() instead of .optional() for structured outputs
+  natural_phrasing_tip: z.string().nullable().describe('How to phrase this naturally in conversation')
+});
+
 export const CandidatePrepSchema = z.object({
   ci_talking_points: z.object({
     strategic_advantages: z.array(z.object({
@@ -67,10 +124,64 @@ export const CandidatePrepSchema = z.object({
     why_asked: z.string().describe('Why interviewers ask this question'),
     approach: z.string().describe('How to approach answering'),
     key_points: z.array(z.string()).max(4).describe('Key points to cover')
-  })).max(5).describe('Standard questions preparation guide')
+  })).max(5).describe('Standard questions preparation guide'),
+  reverse_questions: z.array(ReverseQuestionSchema).min(3).max(5).describe('Reverse interview questions for this round - questions the candidate asks the interviewer')
 });
 
+// Export type for use in components
+export type CandidatePrep = z.infer<typeof CandidatePrepSchema>;
+
+/**
+ * Collection of reverse questions for a single round
+ * Note: This schema is kept for backward compatibility with separate generation flow
+ * In merged approach, reverse_questions are part of CandidatePrepSchema
+ */
+export const ReverseQuestionSetSchema = z.object({
+  questions: z.array(ReverseQuestionSchema).min(3).max(5).describe('3-5 reverse questions for this round'),
+  round_context: z.string().describe('How these questions fit this specific round type'),
+  prioritization_tip: z.string().describe('Which question to prioritize if time is limited')
+});
+
+/**
+ * Consolidated All-Rounds Reverse Questions Schema
+ * For single-context generation approach with explicit constraint tracking
+ */
+export const AllRoundsReverseQuestionsSchema = z.object({
+  fact_allocation: z.object({
+    recruiter_screen: z.array(z.string()).describe('CI fact IDs allocated to recruiter round'),
+    behavioral_deep_dive: z.array(z.string()).describe('CI fact IDs allocated to behavioral round'),
+    culture_values_alignment: z.array(z.string()).describe('CI fact IDs allocated to culture round'),
+    strategic_role_discussion: z.array(z.string()).describe('CI fact IDs allocated to strategic round'),
+    executive_final: z.array(z.string()).describe('CI fact IDs allocated to executive round')
+  }).describe('Fact allocation map showing which facts go to which rounds'),
+
+  questions: z.object({
+    recruiter_screen: z.array(ReverseQuestionSchema).min(2).max(5).describe('Questions for recruiter round'),
+    behavioral_deep_dive: z.array(ReverseQuestionSchema).min(2).max(5).describe('Questions for behavioral round'),
+    culture_values_alignment: z.array(ReverseQuestionSchema).min(2).max(5).describe('Questions for culture round'),
+    strategic_role_discussion: z.array(ReverseQuestionSchema).min(2).max(5).describe('Questions for strategic round'),
+    executive_final: z.array(ReverseQuestionSchema).min(2).max(5).describe('Questions for executive round')
+  }).describe('Generated questions for all rounds'),
+
+  validation: z.object({
+    fact_usage_count: z.array(z.object({
+      fact_id: z.string(),
+      count: z.number()
+    })).describe('Usage count per fact ID'),
+    constraint_satisfied: z.boolean().describe('True if max-2 constraint is satisfied'),
+    warnings: z.array(z.string()).describe('Any warnings or constraint violations')
+  }).describe('Validation results for constraint enforcement')
+});
+
+// Type exports
+export type ReverseQuestionPattern = z.infer<typeof ReverseQuestionPatternEnum>;
+export type CISourceType = z.infer<typeof CISourceTypeEnum>;
+export type ReverseQuestion = z.infer<typeof ReverseQuestionSchema>;
+export type ReverseQuestionSet = z.infer<typeof ReverseQuestionSetSchema>;
+export type AllRoundsReverseQuestions = z.infer<typeof AllRoundsReverseQuestionsSchema>;
+
 // Enhanced role analysis schema (for research node)
+// OpenAI compatibility: All optional fields use .nullable().optional()
 export const EnhancedRoleAnalysisSchema = z.object({
   typical_rounds: z.number().int().min(2).max(8).describe('Typical number of interview rounds'),
   focus_areas: z.array(z.string()).min(2).max(8).describe('Key focus areas for this role'),
@@ -89,42 +200,46 @@ export const EnhancedRoleAnalysisSchema = z.object({
     market_context: z.object({
       competitive_salary_context: z.string().describe('Salary context'),
       market_trends: z.array(z.string()).describe('Market trends')
-    }).optional()
-  }).optional()
+    }).nullable().optional()
+  }).nullable().optional()
 });
 
 // Job parsing schema
+// OpenAI compatibility: All optional fields use .nullable().optional()
 export const JobDataSchema = z.object({
   title: z.string().min(1).describe('Job title'),
   company_name: z.string().min(1).describe('Company name'),
   level: z.string().describe('Job level (e.g., Senior, Lead, Director)'),
-  department: z.string().optional().describe('Department or team'),
-  location: z.string().optional().describe('Job location'),
-  requirements: z.array(z.string()).optional().describe('Key requirements'),
-  responsibilities: z.array(z.string()).optional().describe('Key responsibilities'),
-  url: z.string().optional().describe('Original job posting URL')
+  department: z.string().nullable().optional().describe('Department or team'),
+  location: z.string().nullable().optional().describe('Job location'),
+  requirements: z.array(z.string()).nullable().optional().describe('Key requirements'),
+  responsibilities: z.array(z.string()).nullable().optional().describe('Key responsibilities'),
+  url: z.string().nullable().optional().describe('Original job posting URL')
 });
 
 // Company context schema
+// OpenAI compatibility: All optional fields use .nullable().optional()
 export const CompanyContextSchema = z.object({
   name: z.string().min(1).describe('Company name'),
   industry: z.string().min(1).describe('Industry sector'),
-  size: z.string().optional().describe('Company size'),
+  size: z.string().nullable().optional().describe('Company size'),
   values: z.array(z.string()).min(1).max(8).describe('Company values'),
   culture_highlights: z.array(z.string()).max(5).describe('Key cultural highlights'),
   recent_news: z.array(z.string()).max(3).describe('Recent company news or developments')
 });
 
 // Competitive intelligence schema
+// OpenAI compatibility: All optional fields use .nullable().optional()
 export const CompetitiveIntelligenceSchema = z.object({
   strategicAdvantages: z.array(z.string()).min(1).max(5).describe('Strategic competitive advantages'),
   recentDevelopments: z.array(z.string()).min(1).max(5).describe('Recent company developments'),
   competitivePositioning: z.string().min(1).describe('How company positions vs competitors'),
   roleComparison: z.string().min(1).describe('How this role compares to competitors'),
-  marketContext: z.string().optional().describe('Broader market context')
+  marketContext: z.string().nullable().optional().describe('Broader market context')
 });
 
 // Additional schemas for research and generation nodes
+// OpenAI compatibility: All optional fields use .nullable().optional()
 export const ParsedJobSchema = z.object({
   title: z.string().min(1).describe('Job title'),
   company_name: z.string().min(1).describe('Company name'),
@@ -135,16 +250,16 @@ export const ParsedJobSchema = z.object({
   experience_level: z.string().describe('Years of experience required'),
   location: z.string().describe('Job location'),
   work_arrangement: z.enum(['onsite', 'remote', 'hybrid']).describe('Work arrangement'),
-  source_url: z.string().optional().describe('Source URL'),
-  raw_description: z.string().optional().describe('Raw job description'),
-  parsing_confidence: z.number().optional().describe('Parsing confidence score'),
-  extraction_timestamp: z.string().optional().describe('When job was parsed'),
-  id: z.string().optional().describe('Job ID')
+  source_url: z.string().nullable().optional().describe('Source URL'),
+  raw_description: z.string().nullable().optional().describe('Raw job description'),
+  parsing_confidence: z.number().nullable().optional().describe('Parsing confidence score'),
+  extraction_timestamp: z.string().nullable().optional().describe('When job was parsed'),
+  id: z.string().nullable().optional().describe('Job ID')
 });
 
 export const RoundDefinitionSchema = z.object({
   round_number: z.number().int().describe('Round number'),
-  type: z.string().describe('Round type'),
+  type: NonTechnicalRoundTypeEnum.describe('Round type - must be one of: recruiter_screen, behavioral_deep_dive, culture_values_alignment, strategic_role_discussion, executive_final'),
   title: z.string().describe('Round title'),
   focus_areas: z.array(z.string()).describe('Focus areas'),
   duration_minutes: z.number().int().describe('Duration in minutes')
@@ -164,19 +279,20 @@ export const InterviewerPersonaGenerationSchema = z.object({
   goal: z.string().describe('Interview goal')
 });
 
+// OpenAI compatibility: All optional fields use .nullable().optional()
 export const TopicSchema = z.object({
   topic: z.string().describe('Topic name'),
-  subtopics: z.array(z.string()).optional().nullable().describe('Subtopics'),
-  depth: z.enum(['basic', 'intermediate', 'advanced']).optional().nullable().describe('Topic depth'),
-  time_allocation: z.number().int().optional().nullable().describe('Time allocation'),
-  must_cover: z.boolean().optional().nullable().describe('Must cover flag'),
-  question_count: z.number().int().optional().nullable().describe('Question count'),
-  difficulty_progression: z.string().optional().nullable().describe('Difficulty progression'),
+  subtopics: z.array(z.string()).nullable().optional().describe('Subtopics'),
+  depth: z.enum(['basic', 'intermediate', 'advanced']).nullable().optional().describe('Topic depth'),
+  time_allocation: z.number().int().nullable().optional().describe('Time allocation'),
+  must_cover: z.boolean().nullable().optional().describe('Must cover flag'),
+  question_count: z.number().int().nullable().optional().describe('Question count'),
+  difficulty_progression: z.string().nullable().optional().describe('Difficulty progression'),
   questions: z.array(z.object({
     text: z.string().describe('Question text'),
-    difficulty: z.string().optional().nullable().describe('Question difficulty'),
-    expected_duration: z.number().optional().nullable().describe('Expected duration')
-  })).optional().nullable().describe('Questions for topic')
+    difficulty: z.string().nullable().optional().describe('Question difficulty'),
+    expected_duration: z.number().nullable().optional().describe('Expected duration')
+  })).nullable().optional().describe('Questions for topic')
 });
 
 export const EvaluationCriteriaSchema = z.object({
@@ -185,17 +301,18 @@ export const EvaluationCriteriaSchema = z.object({
   rubric: z.string().describe('Evaluation rubric')
 });
 
+// OpenAI compatibility: All optional fields use .nullable().optional()
 export const RoundContentResponseSchema = z.object({
   interviewer_persona: InterviewerPersonaGenerationSchema.describe('Interviewer persona'),
-  topics: z.array(TopicSchema).optional().nullable().describe('Interview topics'),
-  evaluation_criteria: z.array(EvaluationCriteriaSchema).optional().nullable().describe('Evaluation criteria'),
+  topics: z.array(TopicSchema).nullable().optional().describe('Interview topics'),
+  evaluation_criteria: z.array(EvaluationCriteriaSchema).nullable().optional().describe('Evaluation criteria'),
   sample_questions: z.array(z.object({
     text: z.string().describe('Question text'),
-    difficulty: z.string().optional().nullable().describe('Question difficulty'),
-    expected_duration: z.number().optional().nullable().describe('Expected duration')
-  })).optional().nullable().describe('Sample questions'),
-  opening_script: z.string().optional().nullable().describe('Opening script'),
-  closing_script: z.string().optional().nullable().describe('Closing script')
+    difficulty: z.string().nullable().optional().describe('Question difficulty'),
+    expected_duration: z.number().nullable().optional().describe('Expected duration')
+  })).nullable().optional().describe('Sample questions'),
+  opening_script: z.string().nullable().optional().describe('Opening script'),
+  closing_script: z.string().nullable().optional().describe('Closing script')
 });
 
 export const QualityEvaluationSchema = z.object({

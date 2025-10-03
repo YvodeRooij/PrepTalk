@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
-export default function SignupPage() {
+function SignupForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -13,7 +13,41 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
+  const redirectingRef = useRef(false);
+
+  // Helper function to handle redirect
+  const performRedirect = async (redirectTo: string) => {
+    if (redirectingRef.current) return;
+    redirectingRef.current = true;
+    console.log('[Signup] Redirecting to:', redirectTo);
+
+    // Give the session time to propagate to cookies/server
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Use window.location for hard navigation to ensure middleware sees the session
+    window.location.href = redirectTo;
+  };
+
+  // Listen for auth state changes (handles both password and OAuth flows)
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('[Signup] Auth state change:', event, 'Session:', !!session);
+
+      // Handle all SIGNED_IN events (both password and OAuth)
+      if (event === 'SIGNED_IN' && session && !redirectingRef.current) {
+        const redirectTo = searchParams.get('redirect') || '/dashboard';
+        await performRedirect(redirectTo);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [supabase, searchParams]);
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,32 +67,44 @@ export default function SignupPage() {
     }
 
     try {
-      const { error } = await supabase.auth.signUp({
+      const redirectTo = searchParams.get('redirect') || '/dashboard';
+
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/dashboard`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(redirectTo)}`,
         },
       });
 
       if (error) {
         setError(error.message);
+        setLoading(false);
       } else {
-        setSuccess(true);
+        // Check if user is immediately signed in (email confirmation disabled)
+        if (data.session) {
+          // Auto-confirmed - onAuthStateChange will handle redirect
+          // No need to call performRedirect directly
+        } else {
+          // Email confirmation required
+          setSuccess(true);
+          setLoading(false);
+        }
       }
     } catch (error) {
       setError('An unexpected error occurred');
-    } finally {
       setLoading(false);
     }
   };
 
   const handleGoogleSignUp = async () => {
     try {
+      const redirectTo = searchParams.get('redirect') || '/dashboard';
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(redirectTo)}`,
           queryParams: {
             access_type: 'offline',
             prompt: 'consent',
@@ -218,5 +264,17 @@ export default function SignupPage() {
         </form>
       </div>
     </div>
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-gray-600">Loading...</div>
+      </div>
+    }>
+      <SignupForm />
+    </Suspense>
   );
 }

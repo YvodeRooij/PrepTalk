@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { ArrowLeft, Upload, ExternalLink, Loader2, ChevronLeft } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { SplitScreenView } from '@/components/curriculum/split-screen-view';
+import { AuthGuidanceBox } from '@/components/curriculum/auth-guidance-box';
 import { toast } from 'sonner';
 
 type Step = 'job-url' | 'cv-upload' | 'profile' | 'generating' | 'complete';
@@ -26,6 +27,7 @@ export default function CurriculumCreatePage() {
   const [curriculumId, setCurriculumId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   // 🆕 NEW: Two-stage generation state
   const [showSplitScreen, setShowSplitScreen] = useState(false);
@@ -39,22 +41,54 @@ export default function CurriculumCreatePage() {
 
   // Get authenticated user on mount
   useEffect(() => {
+    const supabase = createClient();
+
     const getUser = async () => {
-      const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setUserId(user.id);
-      } else {
-        // Redirect to login if not authenticated
-        router.push('/login');
+      setUserId(user?.id || null);
+      setIsCheckingAuth(false);
+
+      // If user just logged in, restore saved job URL
+      if (user?.id) {
+        const savedJobUrl = sessionStorage.getItem('preptalk_job_url');
+        if (savedJobUrl) {
+          setFormData(prev => ({ ...prev, jobUrl: savedJobUrl }));
+          sessionStorage.removeItem('preptalk_job_url');
+        }
       }
     };
+
+    // Initial check
     getUser();
-  }, [router]);
+
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
+        getUser(); // Re-check user
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const handleJobUrlSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
     if (formData.jobUrl.trim()) {
+      // Check if user is authenticated before allowing progression
+      if (!userId) {
+        // Save job URL to sessionStorage so they don't lose it
+        sessionStorage.setItem('preptalk_job_url', formData.jobUrl);
+
+        // Redirect to login with return path
+        router.push('/login?redirect=/curriculum');
+        return;
+      }
+
       setCurrentStep('cv-upload');
     }
   };
@@ -68,6 +102,12 @@ export default function CurriculumCreatePage() {
 
   const handleCvSubmit = () => {
     if (formData.cvFile) {
+      // Extra safety check (user should already be authenticated at this point)
+      if (!userId) {
+        router.push('/login?redirect=/curriculum');
+        return;
+      }
+
       setCurrentStep('profile');
     }
   };
@@ -351,6 +391,13 @@ export default function CurriculumCreatePage() {
             >
               Continue to CV Upload
             </button>
+
+            {/* Auth Guidance Box - Show if not signed in (after auth check completes) */}
+            {!isCheckingAuth && !userId && (
+              <div className="mt-6">
+                <AuthGuidanceBox />
+              </div>
+            )}
           </form>
         )}
 

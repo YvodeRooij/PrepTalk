@@ -93,7 +93,8 @@ async function saveCvDemoMode(
         candidate_prep_guide: {
           ci_talking_points: [],
           recognition_training: [],
-          standard_questions_prep: []
+          standard_questions_prep: [],
+          reverse_questions: []
         },
         created_at: timestamp,
         updated_at: timestamp,
@@ -185,27 +186,77 @@ async function updateExistingCurriculum(
       return 'behavioral_deep_dive';
     };
 
-    const roundsToSave = state.rounds.map(round => ({
-      curriculum_id: state.existingCurriculumId,
-      round_number: round.round_number,
-      round_type: mapRoundType(round.round_type),
-      title: round.title,
-      description: round.description,
-      duration_minutes: round.duration_minutes,
-      interviewer_persona: round.interviewer_persona,
-      topics_to_cover: round.topics_to_cover || [],
-      evaluation_criteria: round.evaluation_criteria || [],
-      opening_script: round.opening_script || '',
-      closing_script: round.closing_script || '',
-      passing_score: round.passing_score || 70,
-      candidate_prep_guide: round.candidate_prep_guide || {
-        ci_talking_points: [],
-        recognition_training: [],
-        standard_questions_prep: []
-      },
-      created_at: timestamp,
-      updated_at: timestamp,
-    }));
+    const roundsToSave = state.rounds.map(round => {
+      const originalRoundType = round.round_type;
+      const mappedRoundType = mapRoundType(round.round_type) as any;
+
+      // ✅ FIX: Get prep guide from state.candidatePrepGuides, not from round object
+      const prepGuideData = state.candidatePrepGuides?.[mappedRoundType];
+
+      // 🔬 DEBUG: Log prep guide lookup
+      const advantagesCount = prepGuideData?.ci_talking_points?.strategic_advantages?.length || 0;
+      const developmentsCount = prepGuideData?.ci_talking_points?.recent_developments?.length || 0;
+      const questionsCount = prepGuideData?.standard_questions_prep?.length || 0;
+      const reverseQsCount = prepGuideData?.reverse_questions?.length || 0;
+      console.log(`   🔍 [UPDATE] Round ${round.round_number} (${mappedRoundType}): Advantages=${advantagesCount}, Developments=${developmentsCount}, Questions=${questionsCount}, ReverseQs=${reverseQsCount}`);
+
+      if (!prepGuideData) {
+        console.log(`   ⚠️  [UPDATE] No prep guide for ${mappedRoundType}. Available keys: [${Object.keys(state.candidatePrepGuides || {}).join(', ')}]`);
+      }
+
+      return {
+        curriculum_id: state.existingCurriculumId,
+        round_number: round.round_number,
+        round_type: mappedRoundType,
+        title: round.title,
+        description: round.description,
+        duration_minutes: round.duration_minutes,
+        interviewer_persona: round.interviewer_persona,
+        topics_to_cover: round.topics_to_cover || [],
+        evaluation_criteria: round.evaluation_criteria || [],
+        opening_script: round.opening_script || '',
+        closing_script: round.closing_script || '',
+        passing_score: round.passing_score || 70,
+        // ✅ FIX: Build prep guide using same logic as main create flow
+        candidate_prep_guide: prepGuideData ? {
+          ci_talking_points: {
+            strategic_advantages: prepGuideData?.ci_talking_points?.strategic_advantages || [],
+            recent_developments: prepGuideData?.ci_talking_points?.recent_developments || []
+          },
+          recognition_training: {
+            what_great_answers_sound_like: prepGuideData?.recognition_training?.what_great_answers_sound_like || [],
+            how_to_demonstrate_company_knowledge: prepGuideData?.recognition_training?.how_to_demonstrate_company_knowledge || []
+          },
+          standard_questions_prep: prepGuideData?.standard_questions_prep || [],
+          reverse_questions: prepGuideData?.reverse_questions?.map(q => ({
+            id: q.id,
+            question: q.question_text,
+            ci_fact: q.ci_fact_used,
+            ci_source_type: q.ci_source_type,
+            success_pattern: q.success_pattern,
+            why_it_works: q.why_this_works,
+            green_flags: q.green_flags || [],
+            red_flags: q.red_flags || [],
+            expected_insights: q.expected_insights || [],
+            timing: q.best_timing,
+            natural_phrasing_tip: q.natural_phrasing_tip
+          })) || []
+        } : {
+          ci_talking_points: {
+            strategic_advantages: [],
+            recent_developments: []
+          },
+          recognition_training: {
+            what_great_answers_sound_like: [],
+            how_to_demonstrate_company_knowledge: []
+          },
+          standard_questions_prep: [],
+          reverse_questions: []
+        },
+        created_at: timestamp,
+        updated_at: timestamp,
+      };
+    });
 
     const { error: roundsError } = await supabase
       .from('curriculum_rounds')
@@ -588,11 +639,16 @@ export async function saveCurriculum(
 
     // 🚨 DEBUG: Log original round types before processing
     console.log(`   📋 Original round types: [${state.rounds.map(r => `"${r.round_type}"`).join(', ')}]`);
+    console.log(`   🔑 Available candidatePrepGuides keys: [${Object.keys(state.candidatePrepGuides || {}).join(', ')}]`);
+    console.log(`   🔑 Available standardQuestionSets keys: [${Object.keys(state.standardQuestionSets || {}).join(', ')}]`);
+    console.log(`   🔑 Available reverseQuestionSets keys: [${Object.keys(state.reverseQuestionSets || {}).join(', ')}]`);
 
     const roundsToSave = state.rounds.map(round => {
       // 🔑 CRITICAL FIX: Store original round type before mapping for data lookup
       const originalRoundType = round.round_type;
       const mappedRoundType = mapRoundTypeToValidValue(round.round_type);
+
+      console.log(`   🎯 Processing round ${round.round_number}: "${originalRoundType}" → "${mappedRoundType}"`);
 
       return {
         curriculum_id: curriculum.id,
@@ -619,11 +675,18 @@ export async function saveCurriculum(
 
           if (!hasData) {
             console.log(`   ❌ No candidatePrepGuides data for mapped type '${mappedRoundType}'. Original: '${originalRoundType}'. Available keys: [${Object.keys(state.candidatePrepGuides || {}).join(', ')}]`);
-            // Return minimal structure to satisfy constraint
+            // ✅ FIX: Return correct structure (objects not arrays) to match schema
             return {
-              ci_talking_points: [],
-              recognition_training: [],
-              standard_questions_prep: []
+              ci_talking_points: {
+                strategic_advantages: [],
+                recent_developments: []
+              },
+              recognition_training: {
+                what_great_answers_sound_like: [],
+                how_to_demonstrate_company_knowledge: []
+              },
+              standard_questions_prep: [],
+              reverse_questions: []
             };
           }
 
@@ -636,13 +699,35 @@ export async function saveCurriculum(
               what_great_answers_sound_like: prepGuideData?.recognition_training?.what_great_answers_sound_like || [],
               how_to_demonstrate_company_knowledge: prepGuideData?.recognition_training?.how_to_demonstrate_company_knowledge || []
             },
-            // 🆕 POPULATE standard_questions_prep from standardQuestionSets (use mapped type)
-            standard_questions_prep: state.standardQuestionSets?.[mappedRoundType]?.map(q => ({
-              question: q.question || q.text || '',
-              type: q.type || 'general',
-              category: q.category || 'general',
-              difficulty: q.difficulty || 'medium'
-            })) || []
+            // ✅ FIX: Use standard_questions_prep from the generated candidatePrepGuides (has why_asked, approach, key_points)
+            // Previously was incorrectly pulling from standardQuestionSets which only has type/category/difficulty
+            standard_questions_prep: prepGuideData?.standard_questions_prep || [],
+            // 🆕 POPULATE reverse_questions from prepGuideData (questions candidate asks interviewer)
+            reverse_questions: (() => {
+              const reverseQs = prepGuideData?.reverse_questions;
+              const questionCount = reverseQs?.length || 0;
+
+              console.log(`   🔍 Round ${round.round_number} (${mappedRoundType}): ReverseQuestions=${questionCount}`);
+
+              if (!reverseQs || reverseQs.length === 0) {
+                console.log(`   ❌ No reverse_questions in prepGuideData for type '${mappedRoundType}'. Available keys: [${Object.keys(state.candidatePrepGuides || {}).join(', ')}]`);
+                return [];
+              }
+
+              return reverseQs.map(q => ({
+                id: q.id,
+                question: q.question_text,
+                ci_fact: q.ci_fact_used,
+                ci_source_type: q.ci_source_type,
+                success_pattern: q.success_pattern,
+                why_it_works: q.why_this_works,
+                green_flags: q.green_flags || [],
+                red_flags: q.red_flags || [],
+                expected_insights: q.expected_insights || [],
+                timing: q.best_timing,
+                natural_phrasing_tip: q.natural_phrasing_tip
+              }));
+            })()
           };
         })(),
         created_at: timestamp,
@@ -676,9 +761,10 @@ export async function saveCurriculum(
     // Save questions asynchronously to avoid timeout but still preserve data
     if (state.standardQuestionSets && Object.keys(state.standardQuestionSets).length > 0) {
       // Run question saving in background to avoid timeout
-      setImmediate(async () => {
+      // Use Promise.resolve().then() for cross-environment compatibility (Jest + Node.js)
+      Promise.resolve().then(async () => {
         try {
-          // This runs after the main response is sent
+          // This runs after the current execution context
           const questionBankPromises = Object.entries(state.standardQuestionSets!).map(([roundType, questions]) => {
             return supabase.from('question_bank').insert(
               questions.map((q: any) => ({

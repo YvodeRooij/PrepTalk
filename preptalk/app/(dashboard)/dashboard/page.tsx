@@ -1,5 +1,6 @@
 import { getDashboardData, type JourneyRound, type QuestionGuide } from '@/lib/dashboard/data';
 import { CurriculumSelector } from '@/components/dashboard/curriculum-selector';
+import { ReverseInterviewCard } from '@/components/dashboard/ReverseInterviewCard';
 import Link from 'next/link';
 import { Mic } from 'lucide-react';
 
@@ -123,9 +124,7 @@ export default async function DashboardOverviewPage({
                     Signed in with {user.provider === 'google' ? 'Google' : user.provider}
                   </div>
                 )}
-                <div className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.18em] ${dataSource.tone}`}>
-                  {dataSource.label}
-                </div>
+       
               </div>
             </div>
 
@@ -226,17 +225,17 @@ export default async function DashboardOverviewPage({
         <section className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm md:p-8">
           <div className="space-y-2">
             <div className="flex items-center gap-3">
-              <h2 className="text-2xl font-semibold text-gray-900">Questions to expect</h2>
+              <h2 className="text-2xl font-semibold text-gray-900">Questions you&apos;ll ask</h2>
               {!hasOwnCurriculum && (
-                <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
-                  Preview
-                </span>
+          <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
+            Preview
+          </span>
               )}
             </div>
             <p className="max-w-3xl text-sm text-gray-600 md:text-base">
               {hasOwnCurriculum
-                ? 'Expect questions like these—use them as a guide to surface signal, build rapport, and show you\'re thinking beyond the script.'
-                : 'Preview example interview questions. Your personalized questions will be tailored to your role and experience.'
+          ? 'Built with April Dunford\'s positioning framework — these prompts help you uncover real alternatives, success metrics, value drivers, and risks for this role. We researched and tailored them so you lead the conversation and look prepared.'
+          : 'Preview April Dunford-style positioning prompts you\'ll use to uncover alternatives, value, and success metrics. Create your curriculum to tailor them to your role and company context.'
               }
             </p>
           </div>
@@ -244,32 +243,7 @@ export default async function DashboardOverviewPage({
           {questionGuides.length > 0 ? (
             <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {questionGuides.slice(0, hasOwnCurriculum ? undefined : 3).map((guide: QuestionGuide) => (
-                <article
-                  key={guide.id}
-                  className={`relative flex h-full flex-col gap-4 rounded-lg border border-gray-200 bg-gray-50 p-5 ${!hasOwnCurriculum ? 'opacity-70' : ''}`}
-                >
-                  {!hasOwnCurriculum && (
-                    <div className="absolute right-3 top-3">
-                      <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                      </svg>
-                    </div>
-                  )}
-                  <header className="space-y-1">
-                    <p className="text-xs font-semibold uppercase tracking-[0.22em] text-blue-600">
-                      {guide.persona}
-                    </p>
-                    <p className="text-sm text-gray-600">{guide.context}</p>
-                  </header>
-                  <ul className="space-y-2 text-sm text-gray-700">
-                    {guide.prompts.map((prompt: string, index: number) => (
-                      <li key={index} className="flex gap-2">
-                        <span className="mt-1 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-blue-400" />
-                        <span>{prompt}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </article>
+                <ReverseInterviewCard key={guide.id} guide={guide} isLocked={!hasOwnCurriculum} />
               ))}
             </div>
           ) : (
@@ -466,7 +440,7 @@ function JourneyCard({ round, isLocked }: { round: JourneyRound; isLocked: boole
             }
           `}>
             <Mic className="h-3.5 w-3.5" />
-            <span>Practice voice</span>
+            <span>Start Interview</span>
             <svg
               className="w-3 h-3 ml-auto transition-transform duration-200 group-hover:translate-x-1"
               viewBox="0 0 24 24"

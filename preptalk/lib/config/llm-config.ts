@@ -25,6 +25,8 @@ export interface LLMConfig {
     candidate_prep: ModelConfig;
     quality_evaluation: ModelConfig;
     unified_context_engine: ModelConfig;
+    reverse_interview_questions: ModelConfig;
+    ci_categorization_ab_test: ModelConfig;
   };
 
   // Mistral OCR specific configuration
@@ -133,6 +135,22 @@ export const DEFAULT_LLM_CONFIG: LLMConfig = {
       temperature: 0.4,
       maxTokens: 8192, // Large context for synthesizing job + user + CV data
       timeout: 60000 // Quality > Speed - 60 second timeout
+    },
+
+    // Reverse interview questions: CI-powered questions candidate asks interviewer
+    reverse_interview_questions: {
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      temperature: 0.6,
+      maxTokens: 2500
+    },
+
+    // CI categorization A/B test: Evaluation task for differentiation testing
+    ci_categorization_ab_test: {
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5-20250929',
+      temperature: 0, // Zero temperature for consistent evaluation
+      maxTokens: 4096
     }
   },
 
