@@ -19,6 +19,7 @@ export async function GET() {
     }
 
     // Fetch user's curricula
+    // Note: curricula don't have user_id directly - we need to join through cv_analyses
     const { data: curricula, error: curriculaError } = await supabase
       .from('curricula')
       .select(`
@@ -26,10 +27,12 @@ export async function GET() {
         job_title,
         company_name,
         created_at,
-        status
+        generation_status,
+        cv_analysis_id,
+        cv_analyses!inner(user_id)
       `)
-      .eq('user_id', userId)
-      .eq('status', 'completed')
+      .eq('cv_analyses.user_id', userId)
+      .eq('generation_status', 'complete')
       .order('created_at', { ascending: false });
 
     if (curriculaError) {

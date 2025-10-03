@@ -2,8 +2,6 @@
 // Handles loading LLM configuration from environment variables and files
 
 import { LLMConfig, DEFAULT_LLM_CONFIG, PRODUCTION_LLM_CONFIG, DEVELOPMENT_LLM_CONFIG } from './llm-config';
-import * as fs from 'fs';
-import * as path from 'path';
 
 /**
  * Load LLM configuration from environment or config file
@@ -22,16 +20,20 @@ export function loadLLMConfig(): LLMConfig {
     config = { ...config, ...DEVELOPMENT_LLM_CONFIG };
   }
 
-  // Check for custom config file
-  const configPath = process.env.LLM_CONFIG_PATH || path.join(process.cwd(), 'llm-config.json');
-
-  if (fs.existsSync(configPath)) {
+  // Check for custom config file (only in server environment)
+  if (typeof window === 'undefined') {
     try {
-      const fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      config = { ...config, ...fileConfig };
-      console.log(`📄 Loaded LLM config from: ${configPath}`);
+      const fs = require('fs');
+      const path = require('path');
+      const configPath = process.env.LLM_CONFIG_PATH || path.join(process.cwd(), 'llm-config.json');
+
+      if (fs.existsSync(configPath)) {
+        const fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        config = { ...config, ...fileConfig };
+        console.log(`📄 Loaded LLM config from: ${configPath}`);
+      }
     } catch (error) {
-      console.warn(`⚠️  Failed to load config file ${configPath}:`, error);
+      console.warn(`⚠️  Failed to load config file:`, error);
     }
   }
 
@@ -100,6 +102,14 @@ export function validateProviderCredentials(config: LLMConfig): void {
  * Create a sample configuration file
  */
 export function createSampleConfigFile(outputPath?: string): void {
+  if (typeof window !== 'undefined') {
+    console.error('createSampleConfigFile can only be called on the server');
+    return;
+  }
+
+  const fs = require('fs');
+  const path = require('path');
+
   const sampleConfig = {
     primaryProvider: 'gemini',
     fallbackProviders: ['openai'],

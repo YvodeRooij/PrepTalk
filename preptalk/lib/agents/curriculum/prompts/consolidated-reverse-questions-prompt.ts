@@ -182,14 +182,28 @@ CONSTRAINT CHECK:
 
 ## Step 2: Generate Questions
 
-For each round, generate 3-5 questions using ONLY the facts you allocated in Step 1.
+For each round, generate 2-5 questions using ONLY the facts you allocated in Step 1.
 
 Apply the round's specific angle to each fact.
 
+CRITICAL: As you generate each question, reference your fact allocation from Step 1.
+Do NOT use any facts that weren't allocated to this round.
+
 ## Step 3: Validate Before Returning
 
-Count usage of each fact ID across all questions.
-If any fact exceeds 2 uses, STOP and revise your allocation.
+MANDATORY VALIDATION - Do this BEFORE returning your response:
+
+1. Count how many times each fact_id appears across ALL questions
+2. Check: Does ANY fact appear more than 2 times?
+3. If YES:
+   - Identify the violating fact(s)
+   - Go back to Step 1 and revise your allocation
+   - Regenerate the questions for affected rounds
+   - Validate again until constraint is satisfied
+4. If NO: Proceed to return the response
+
+Set constraint_satisfied to TRUE only if ALL facts are used ≤ 2 times.
+Add warnings for any facts at the limit (used exactly 2 times).
 
 </instructions>
 
@@ -213,12 +227,17 @@ Return JSON with this exact structure:
   "questions": {
     "recruiter_screen": [
       {
-        "question_text": "Natural, conversational question",
-        "ci_fact_id": "fact_id_1",
-        "angle_used": "Company Selling Points & Role Clarity",
-        "phrasing_structure": "Structure 2",
-        "why_this_works": "Brief explanation",
-        "best_timing": "opening"
+        "id": "recruiter_screen-rq1",
+        "question_text": "Natural, conversational question (min 30 chars)",
+        "ci_fact_used": "Exact CI fact text from section 1",
+        "ci_source_type": "strategic_advantage or recent_development",
+        "success_pattern": "recent_event_team_impact",
+        "why_this_works": "Brief explanation (min 50 chars)",
+        "green_flags": ["Positive signal 1", "Positive signal 2"],
+        "red_flags": ["Warning signal 1"],
+        "expected_insights": ["What you'll learn 1", "What you'll learn 2"],
+        "best_timing": "opening",
+        "natural_phrasing_tip": "How to phrase naturally (can be null)"
       }
     ],
     "behavioral_deep_dive": [...],
@@ -236,6 +255,19 @@ Return JSON with this exact structure:
     "warnings": []
   }
 }
+
+IMPORTANT: Each question MUST include ALL required fields to match the schema:
+- id: Unique identifier (e.g., "recruiter_screen-rq1")
+- question_text: Min 30 characters
+- ci_fact_used: EXACT fact text (not just ID)
+- ci_source_type: "strategic_advantage" or "recent_development"
+- success_pattern: One of the proven patterns
+- why_this_works: Min 50 characters
+- green_flags: 2-4 positive signals
+- red_flags: 1-3 warning signals
+- expected_insights: 2-4 insights
+- best_timing: "opening", "mid_conversation", or "closing"
+- natural_phrasing_tip: Optional tip (can be null)
 </output_format>`;
 }
 

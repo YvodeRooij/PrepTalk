@@ -1,13 +1,25 @@
+'use client';
+
 import React from 'react';
 import Link from 'next/link';
 import { LogOut, Home, BookOpen, CreditCard, User, FileText } from 'lucide-react';
 import { Toaster } from 'sonner';
+import { createClient } from '@/lib/supabase/client';
+import { useRouter } from 'next/navigation';
 
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const router = useRouter();
+  const supabase = createClient();
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    router.push('/login');
+    // No router.refresh() needed - AuthProvider handles it
+  };
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <Toaster position="top-right" richColors />
@@ -57,15 +69,13 @@ export default function DashboardLayout({
                 <User className="h-4 w-4" />
                 <span className="hidden sm:inline">Profile</span>
               </Link>
-              <form action="/auth/signout" method="GET">
-                <button
-                  type="submit"
-                  className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md"
-                >
-                  <LogOut className="h-4 w-4" />
-                  <span className="hidden sm:inline">Sign out</span>
-                </button>
-              </form>
+              <button
+                onClick={handleSignOut}
+                className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md"
+              >
+                <LogOut className="h-4 w-4" />
+                <span className="hidden sm:inline">Sign out</span>
+              </button>
             </div>
           </div>
         </div>

@@ -1,18 +1,12 @@
 // LLM Provider Service - Multi-provider abstraction with intelligent fallback
 // Supports Gemini, OpenAI, Anthropic with LangChain structured outputs
 // Uses LangChain's withStructuredOutput internally for OOTB, battle-tested implementation
+// OPTIMIZED: Uses lazy imports to reduce initial memory footprint and prevent build crashes
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { GoogleGenAI } from '@google/genai';
 import { LLMConfig, ModelConfig, getOptimalProvider, calculateEstimatedCost } from '../config/llm-config';
-import OpenAI from 'openai';
-import Anthropic from '@anthropic-ai/sdk';
 
-// LangChain imports for structured outputs
+// LangChain imports for structured outputs - only import z, rest are lazy-loaded
 import { z } from 'zod';
-import { ChatOpenAI } from '@langchain/openai';
-import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
-import { ChatAnthropic } from '@langchain/anthropic';
 
 // Provider-specific model mappings
 const PROVIDER_MODEL_MAP = {
@@ -104,7 +98,6 @@ export class LLMProviderService {
   private stats: Map<string, ProviderStats>;
   private cache: Map<string, { result: GenerationResult; expiresAt: number }>;
   private rateLimiter: Map<string, { count: number; windowStart: number }>;
-  private geminiGroundingClient?: GoogleGenAI; // New SDK for url_context + google_search
 
   constructor(config: LLMConfig) {
     this.config = config;
@@ -120,130 +113,106 @@ export class LLMProviderService {
   }
 
   private initializeProviders(): void {
-    // Initialize Gemini (primary) - Flash models for stability
+    // Initialize provider markers (lazy-load actual SDKs when needed)
+    // This prevents memory exhaustion during build/initialization
+
     if (process.env.GOOGLE_API_KEY) {
-      try {
-        const geminiInstance = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-        this.providers.set('gemini', geminiInstance);
-        // Add gemini-pro as separate provider (same instance, different models)
-        // Fallback chain: gemini (flash) → gemini-pro (pro) → openai
-        this.providers.set('gemini-pro', geminiInstance);
-
-        // Initialize new Gemini SDK for url_context + google_search grounding
-        this.geminiGroundingClient = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
-
-        console.log('✅ Gemini provider initialized (Flash + Pro models + Grounding)');
-      } catch (error) {
-        console.warn('❌ Gemini provider initialization failed:', error.message);
-      }
+      this.providers.set('gemini', { apiKey: process.env.GOOGLE_API_KEY, type: 'gemini' });
+      this.providers.set('gemini-pro', { apiKey: process.env.GOOGLE_API_KEY, type: 'gemini' });
+      console.log('✅ Gemini provider configured (lazy-load on first use)');
     }
 
-    // Initialize OpenAI (fallback)
     if (process.env.OPENAI_API_KEY) {
-      try {
-        this.providers.set('openai', new OpenAI({
-          apiKey: process.env.OPENAI_API_KEY,
-          maxRetries: 0 // We handle retries ourselves
-        }));
-        console.log('✅ OpenAI provider initialized');
-      } catch (error) {
-        console.warn('❌ OpenAI provider initialization failed:', error.message);
-      }
+      this.providers.set('openai', { apiKey: process.env.OPENAI_API_KEY, type: 'openai' });
+      console.log('✅ OpenAI provider configured (lazy-load on first use)');
     }
 
-    // Initialize Anthropic (fallback)
     if (process.env.ANTHROPIC_API_KEY) {
-      try {
-        this.providers.set('anthropic', new Anthropic({
-          apiKey: process.env.ANTHROPIC_API_KEY
-        }));
-        console.log('✅ Anthropic provider initialized');
-      } catch (error) {
-        console.warn('❌ Anthropic provider initialization failed:', error.message);
-      }
+      this.providers.set('anthropic', { apiKey: process.env.ANTHROPIC_API_KEY, type: 'anthropic' });
+      console.log('✅ Anthropic provider configured (lazy-load on first use)');
     }
 
-    // Initialize Grok (when available)
     if (process.env.GROK_API_KEY) {
       console.log('⏳ Grok provider configured (implementation pending)');
     }
 
     const availableProviders = Array.from(this.providers.keys());
     if (availableProviders.length === 0) {
-      console.warn('⚠️ No LLM providers initialized! Check your API keys.');
+      console.warn('⚠️ No LLM providers configured! Check your API keys.');
     } else {
       console.log(`✅ Available providers: ${availableProviders.join(', ')}`);
     }
   }
 
-  private initializeLangChainProviders(): void {
-    // Initialize LangChain models for structured outputs
+  private async initializeLangChainProviders(): Promise<void> {
+    // Lazy-load LangChain providers to prevent memory issues during build
+    // Models are created on-demand when first needed
+
     const providerConfigs = [
       {
         name: 'gemini',
         apiKey: process.env.GOOGLE_API_KEY,
-        createModel: (task: string) => new ChatGoogleGenerativeAI({
-          model: getProviderModel('gemini', task),
-          temperature: 0,
-          apiKey: process.env.GOOGLE_API_KEY,
-          maxRetries: 3,
-          maxConcurrency: 5 // Limit concurrent API calls for rate limiting
-        })
+        createModel: async (task: string) => {
+          const { ChatGoogleGenerativeAI } = await import('@langchain/google-genai');
+          return new ChatGoogleGenerativeAI({
+            model: getProviderModel('gemini', task),
+            temperature: 0,
+            apiKey: process.env.GOOGLE_API_KEY,
+            maxRetries: 3,
+            maxConcurrency: 5
+          });
+        }
       },
       {
         name: 'gemini-pro',
         apiKey: process.env.GOOGLE_API_KEY,
-        createModel: (task: string) => new ChatGoogleGenerativeAI({
-          model: getProviderModel('gemini-pro', task),
-          temperature: 0,
-          apiKey: process.env.GOOGLE_API_KEY,
-          maxRetries: 3,
-          maxConcurrency: 5 // Limit concurrent API calls for rate limiting
-        })
+        createModel: async (task: string) => {
+          const { ChatGoogleGenerativeAI } = await import('@langchain/google-genai');
+          return new ChatGoogleGenerativeAI({
+            model: getProviderModel('gemini-pro', task),
+            temperature: 0,
+            apiKey: process.env.GOOGLE_API_KEY,
+            maxRetries: 3,
+            maxConcurrency: 5
+          });
+        }
       },
       {
         name: 'openai',
         apiKey: process.env.OPENAI_API_KEY,
-        createModel: (task: string) => new ChatOpenAI({
-          model: getProviderModel('openai', task),
-          temperature: 0,
-          apiKey: process.env.OPENAI_API_KEY,
-          maxRetries: 3,
-          maxConcurrency: 5 // Limit concurrent API calls for rate limiting
-        })
+        createModel: async (task: string) => {
+          const { ChatOpenAI } = await import('@langchain/openai');
+          return new ChatOpenAI({
+            model: getProviderModel('openai', task),
+            temperature: 0,
+            apiKey: process.env.OPENAI_API_KEY,
+            maxRetries: 3,
+            maxConcurrency: 5
+          });
+        }
       },
       {
         name: 'anthropic',
         apiKey: process.env.ANTHROPIC_API_KEY,
-        createModel: (task: string) => new ChatAnthropic({
-          model: getProviderModel('anthropic', task),
-          temperature: 0,
-          anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-          maxRetries: 3,
-          maxConcurrency: 5 // Limit concurrent API calls for rate limiting
-          // Note: Don't set topP - Anthropic doesn't accept top_p parameter at all
-          // LangChain will handle omitting it if not set
-        })
+        createModel: async (task: string) => {
+          const { ChatAnthropic } = await import('@langchain/anthropic');
+          return new ChatAnthropic({
+            model: getProviderModel('anthropic', task),
+            temperature: 0,
+            anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+            maxRetries: 3,
+            maxConcurrency: 5
+          });
+        }
       }
     ];
 
     for (const config of providerConfigs) {
       if (config.apiKey) {
-        try {
-          // Test model creation
-          const testModel = config.createModel('default');
-          this.langchainProviders.set(config.name, {
-            available: true,
-            langchainModel: config.createModel
-          });
-          console.log(`✅ LangChain ${config.name} provider ready for structured outputs`);
-        } catch (error) {
-          this.langchainProviders.set(config.name, {
-            available: false,
-            reason: `Initialization failed: ${error.message}`
-          });
-          console.warn(`❌ LangChain ${config.name} provider failed:`, error.message);
-        }
+        this.langchainProviders.set(config.name, {
+          available: true,
+          langchainModel: config.createModel
+        });
       } else {
         this.langchainProviders.set(config.name, {
           available: false,
@@ -402,11 +371,11 @@ export class LLMProviderService {
 
         // Only Gemini supports URL grounding via fileData
         if (providerName === 'gemini' || providerName === 'gemini-pro') {
-          const provider = this.providers.get(providerName);
+          const providerConfig = this.providers.get(providerName);
           const providerModel = getProviderModel(providerName, task);
 
           result = await this.callGeminiWithUrl(
-            provider,
+            providerConfig.apiKey,
             { ...modelConfig, model: providerModel },
             url,
             prompt,
@@ -482,8 +451,8 @@ export class LLMProviderService {
     urls: string[],
     options: GenerationOptions = {}
   ): Promise<GenerationResult> {
-    if (!this.geminiGroundingClient) {
-      throw new Error('Gemini grounding client not initialized');
+    if (!process.env.GOOGLE_API_KEY) {
+      throw new Error('Gemini API key not configured');
     }
 
     if (urls.length > 20) {
@@ -491,52 +460,30 @@ export class LLMProviderService {
       urls = urls.slice(0, 20);
     }
 
-    // Force text output for grounding (tools don't support JSON mode)
     const textOptions = { ...options, format: 'text' as const };
-
-    return this.callGroundingMethod(
-      task,
-      prompt,
-      textOptions,
-      { urlContext: {} },
-      urls
-    );
+    return this.callGroundingMethod(task, prompt, textOptions, { urlContext: {} }, urls);
   }
 
-  /**
-   * Generate content using Google Search grounding
-   * Searches Google and provides structured citations
-   */
   async generateWithGoogleSearch(
     task: keyof LLMConfig['models'],
     prompt: string,
     options: GenerationOptions = {}
   ): Promise<GenerationResult> {
-    if (!this.geminiGroundingClient) {
-      throw new Error('Gemini grounding client not initialized');
+    if (!process.env.GOOGLE_API_KEY) {
+      throw new Error('Gemini API key not configured');
     }
 
-    return this.callGroundingMethod(
-      task,
-      prompt,
-      options,
-      { googleSearch: {} }
-    );
+    return this.callGroundingMethod(task, prompt, options, { googleSearch: {} });
   }
 
-  /**
-   * Generate content using BOTH URL Context + Google Search grounding
-   * Most comprehensive: fetches specific URLs + searches for additional context
-   * Returns TEXT with citations - use generateStructured() afterwards for JSON
-   */
   async generateWithCombinedGrounding(
     task: keyof LLMConfig['models'],
     prompt: string,
     urls: string[],
     options: GenerationOptions = {}
   ): Promise<GenerationResult> {
-    if (!this.geminiGroundingClient) {
-      throw new Error('Gemini grounding client not initialized');
+    if (!process.env.GOOGLE_API_KEY) {
+      throw new Error('Gemini API key not configured');
     }
 
     if (urls.length > 20) {
@@ -544,16 +491,8 @@ export class LLMProviderService {
       urls = urls.slice(0, 20);
     }
 
-    // Force text output for grounding (tools don't support JSON mode)
     const textOptions = { ...options, format: 'text' as const };
-
-    return this.callGroundingMethod(
-      task,
-      prompt,
-      textOptions,
-      { urlContext: {}, googleSearch: {} },
-      urls
-    );
+    return this.callGroundingMethod(task, prompt, textOptions, { urlContext: {}, googleSearch: {} }, urls);
   }
 
   /**
@@ -607,8 +546,12 @@ export class LLMProviderService {
           configParams.systemInstruction = { parts: [{ text: options.systemPrompt }] };
         }
 
+        // Lazy-load Gemini grounding client
+        const { GoogleGenAI } = await import('@google/genai');
+        const geminiGroundingClient = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY! });
+
         // Call new Gemini SDK with grounding tools
-        const response = await this.geminiGroundingClient!.models.generateContent({
+        const response = await geminiGroundingClient.models.generateContent({
           model: providerModel,
           contents: [{
             role: 'user',
@@ -941,7 +884,7 @@ export class LLMProviderService {
     }
 
     // Create LangChain model instance
-    let llmModel = provider.langchainModel(task);
+    let llmModel = await provider.langchainModel(task);
 
     // Configure temperature if provided
     if (options.temperature !== undefined) {
@@ -995,7 +938,7 @@ export class LLMProviderService {
     }
 
     // Create LangChain model instance
-    const llmModel = provider.langchainModel(task);
+    const llmModel = await provider.langchainModel(task);
 
     // Configure temperature if provided
     if (options.temperature !== undefined) {
@@ -1082,9 +1025,9 @@ export class LLMProviderService {
     task?: string
   ): Promise<GenerationResult> {
     const startTime = Date.now();
-    const provider = this.providers.get(providerName);
+    const providerConfig = this.providers.get(providerName);
 
-    if (!provider) {
+    if (!providerConfig) {
       throw new Error(`Provider ${providerName} not initialized`);
     }
 
@@ -1097,17 +1040,17 @@ export class LLMProviderService {
     switch (providerName) {
       case 'gemini':
       case 'gemini-pro':
-        result = await this.callGemini(provider, { ...config, model: providerModel }, prompt, options);
+        result = await this.callGemini(providerConfig.apiKey, { ...config, model: providerModel }, prompt, options);
         tokensUsed = result.response?.usageMetadata?.totalTokenCount || 0;
         break;
 
       case 'openai':
-        result = await this.callOpenAI(provider, { ...config, model: providerModel }, prompt, options);
+        result = await this.callOpenAI(providerConfig.apiKey, { ...config, model: providerModel }, prompt, options);
         tokensUsed = result.usage?.total_tokens || 0;
         break;
 
       case 'anthropic':
-        result = await this.callAnthropic(provider, { ...config, model: providerModel }, prompt, options);
+        result = await this.callAnthropic(providerConfig.apiKey, { ...config, model: providerModel }, prompt, options);
         tokensUsed = result.usage?.output_tokens || 0;
         break;
 
@@ -1130,8 +1073,11 @@ export class LLMProviderService {
     };
   }
 
-  private async callGemini(provider: any, config: ModelConfig, prompt: string, options: GenerationOptions) {
-    const model = provider.getGenerativeModel({
+  private async callGemini(apiKey: string, config: ModelConfig, prompt: string, options: GenerationOptions) {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const geminiInstance = new GoogleGenerativeAI(apiKey);
+
+    const model = geminiInstance.getGenerativeModel({
       model: config.model,
       generationConfig: {
         temperature: config.temperature,
@@ -1150,8 +1096,7 @@ export class LLMProviderService {
    * Fetches URL content first, then passes to Gemini for processing
    * (Gemini's fileUri only works with uploaded files, not direct URLs)
    */
-  private async callGeminiWithUrl(provider: any, config: ModelConfig, url: string, prompt: string, options: GenerationOptions) {
-    // Import axios and cheerio
+  private async callGeminiWithUrl(apiKey: string, config: ModelConfig, url: string, prompt: string, options: GenerationOptions) {
     const axios = await import('axios');
     const cheerio = await import('cheerio');
 
@@ -1160,23 +1105,20 @@ export class LLMProviderService {
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; PrepTalk/1.0; +https://preptalk.ai)'
       },
-      timeout: 10000 // 10 second timeout
+      timeout: 10000
     });
 
     // Parse HTML and extract text content
     const $ = cheerio.load(response.data);
-
-    // Remove script and style elements
     $('script, style, noscript').remove();
+    const text = $('body').text().replace(/\s+/g, ' ').trim().substring(0, 50000);
 
-    // Extract text content, focusing on main content areas
-    const text = $('body').text()
-      .replace(/\s+/g, ' ') // Normalize whitespace
-      .trim()
-      .substring(0, 50000); // Limit to 50k chars to avoid token limits
+    // Lazy-load Gemini SDK
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const geminiInstance = new GoogleGenerativeAI(apiKey);
 
     // Create model
-    const model = provider.getGenerativeModel({
+    const model = geminiInstance.getGenerativeModel({
       model: config.model,
       generationConfig: {
         temperature: config.temperature,
@@ -1192,13 +1134,14 @@ export class LLMProviderService {
     return await model.generateContent(fullPrompt);
   }
 
-  private async callOpenAI(provider: any, config: ModelConfig, prompt: string, options: GenerationOptions) {
-    const messages = [];
+  private async callOpenAI(apiKey: string, config: ModelConfig, prompt: string, options: GenerationOptions) {
+    const OpenAI = (await import('openai')).default;
+    const openai = new OpenAI({ apiKey, maxRetries: 0 });
 
+    const messages = [];
     if (options.systemPrompt) {
       messages.push({ role: 'system', content: options.systemPrompt });
     }
-
     messages.push({ role: 'user', content: prompt });
 
     const requestParams: any = {
@@ -1211,15 +1154,15 @@ export class LLMProviderService {
     if (config.topP) requestParams.top_p = config.topP;
     if (config.frequencyPenalty) requestParams.frequency_penalty = config.frequencyPenalty;
     if (config.presencePenalty) requestParams.presence_penalty = config.presencePenalty;
+    if (options.format === 'json') requestParams.response_format = { type: 'json_object' };
 
-    if (options.format === 'json') {
-      requestParams.response_format = { type: 'json_object' };
-    }
-
-    return await provider.chat.completions.create(requestParams);
+    return await openai.chat.completions.create(requestParams);
   }
 
-  private async callAnthropic(provider: any, config: ModelConfig, prompt: string, options: GenerationOptions) {
+  private async callAnthropic(apiKey: string, config: ModelConfig, prompt: string, options: GenerationOptions) {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const anthropic = new Anthropic({ apiKey });
+
     const requestParams: any = {
       model: config.model,
       max_tokens: config.maxTokens,
@@ -1227,13 +1170,10 @@ export class LLMProviderService {
       messages: [{ role: 'user', content: prompt }]
     };
 
-    if (options.systemPrompt) {
-      requestParams.system = options.systemPrompt;
-    }
-
+    if (options.systemPrompt) requestParams.system = options.systemPrompt;
     if (config.topP) requestParams.top_p = config.topP;
 
-    return await provider.messages.create(requestParams);
+    return await anthropic.messages.create(requestParams);
   }
 
   private extractContent(result: any, provider: string): string {

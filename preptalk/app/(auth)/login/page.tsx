@@ -1,17 +1,51 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
-export default function LoginPage() {
+function LoginForm() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
+  const redirectingRef = useRef(false);
+
+  // Helper function to handle redirect
+  const performRedirect = async (redirectTo: string) => {
+    if (redirectingRef.current) return;
+    redirectingRef.current = true;
+    console.log('[Login] Redirecting to:', redirectTo);
+
+    // Give the session time to propagate to cookies/server
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Use window.location for hard navigation to ensure middleware sees the session
+    window.location.href = redirectTo;
+  };
+
+  // Listen for auth state changes (handles both password and OAuth flows)
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log('[Login] Auth state change:', event, 'Session:', !!session);
+
+      // Handle all SIGNED_IN events (both password and OAuth)
+      if (event === 'SIGNED_IN' && session && !redirectingRef.current) {
+        const redirectTo = searchParams.get('redirect') || '/dashboard';
+        await performRedirect(redirectTo);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [supabase, searchParams]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,23 +60,25 @@ export default function LoginPage() {
 
       if (error) {
         setError(error.message);
-      } else {
-        router.push('/dashboard');
-        router.refresh();
+        setLoading(false);
       }
+      // Let onAuthStateChange handle the redirect
+      // This ensures the session is fully established before redirecting
     } catch (error) {
       setError('An unexpected error occurred');
-    } finally {
       setLoading(false);
     }
   };
 
   const handleGoogleSignIn = async () => {
     try {
+      // Preserve redirect in OAuth callback
+      const redirectTo = searchParams.get('redirect') || '/dashboard';
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(redirectTo)}`,
           queryParams: {
             access_type: 'offline',
             prompt: 'consent',
@@ -73,13 +109,12 @@ export default function LoginPage() {
 
       if (error) {
         setError(error.message);
-      } else {
-        router.push('/dashboard');
-        router.refresh();
+        setLoading(false);
       }
+      // Let onAuthStateChange handle the redirect
+      // This ensures the session is fully established before redirecting
     } catch (error) {
       setError('Failed to sign in with test account');
-    } finally {
       setLoading(false);
     }
   };
@@ -198,5 +233,17 @@ export default function LoginPage() {
         </form>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-gray-600">Loading...</div>
+      </div>
+    }>
+      <LoginForm />
+    </Suspense>
   );
 }

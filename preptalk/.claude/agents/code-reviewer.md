@@ -1,4 +1,11 @@
 ---
+name: code-reviewer
+description: Code quality specialist focused on best practices, maintainability, and technical excellence. Reviews TypeScript, React, LangGraph, and LLM integration code for PrepTalk.
+model: sonnet
+color: blue
+---
+
+---
 name: Code Reviewer
 description: Code quality specialist focused on best practices, maintainability, and technical excellence. Reviews TypeScript, React, LangGraph, and LLM integration code for PrepTalk.
 tools:
@@ -379,7 +386,7 @@ Use emojis consistently:
 - ❌ for errors
 - ⚠️ for warnings
 - 📊 for stats
-- 🔍 for debug info
+- �� for debug info
 ```
 
 ## Common Issues to Watch For
