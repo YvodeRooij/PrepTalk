@@ -363,7 +363,7 @@ export default function CurriculumCreatePage() {
             <div>
               <h2 className="text-xl font-semibold text-gray-900 mb-2">Job Role Information</h2>
               <p className="text-gray-600 mb-4">
-                Paste the job posting URL or describe the role you're preparing for.
+                Paste the job posting URL
               </p>
             </div>
 
